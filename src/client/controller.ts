@@ -326,7 +326,18 @@ export class Controller {
           mix = 210;
           break;
         }
-        case 'military': case 'airdefense': mix = 70; break;
+        case 'military': {
+          ownerRgb = lerp3(ownerRgb, [40, 40, 45], 0.45);
+          if (me) {
+            if (ctrl === me) ctrlRgb = lerp3(ownerRgb, [70, 210, 150], 0.7);
+            else if (enemies.has(ctrl)) ctrlRgb = lerp3(ownerRgb, [235, 55, 45], 0.75);
+            else ctrlRgb = lerp3(ownerRgb, [255, 255, 255], 0.08);
+          } else ctrlRgb = ownerRgb;
+          if (s.prov.damage[p.id] > 0.05) ownerRgb = ctrlRgb = lerp3(ctrlRgb, [15, 10, 10], Math.min(1, s.prov.damage[p.id]));
+          mix = 200;
+          break;
+        }
+        case 'airdefense': mix = 70; break;
         case 'resources': {
           const keys = Object.keys(p.resources) as (keyof typeof RESOURCE_INFO)[];
           if (keys.length) {
