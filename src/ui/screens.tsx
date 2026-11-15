@@ -27,7 +27,7 @@ export function Loading() {
 export function MainMenu({ onSettings }: { onSettings: () => void }) {
   const items: [string, string, () => void][] = [
     ['Одиночная кампания', '2020 → бесконечность, реальные события', () => { ctl.screen = 'select'; ctl.inspectCountry = null; ctl.engine.controls.flyTo(45, 30, 1.9); ctl.bump(); }],
-    ['Мультиплеер', netMode() === 'online' ? 'до 16 игроков онлайн' : 'локально: вкладки этого браузера', () => { ctl.screen = 'lobby'; ctl.bump(); }],
+    ['Мультиплеер', netMode() === 'online' ? 'до 16 игроков онлайн' : 'P2P по интернету, до 16 игроков', () => { ctl.screen = 'lobby'; ctl.bump(); }],
     ['Настройки', 'звук, сеть, управление', onSettings],
   ];
   return (
@@ -193,6 +193,7 @@ export function Lobby() {
   const [room, setRoom] = useState<HostSession | ClientSession | null>(null);
   const [name, setName] = useState(ctl.playerName);
   const [roomName, setRoomName] = useState(`Штаб ${ctl.playerName}`);
+  const [joinCode, setJoinCode] = useState('');
   const [chat, setChat] = useState('');
   useEffect(() => { browser.onChange = () => force((x) => x + 1); return () => browser.close(); }, []);
   useEffect(() => {
@@ -208,7 +209,7 @@ export function Lobby() {
   };
   const host = () => {
     saveName();
-    const h = new HostSession(ctl.world, ctl.playerId, ctl.playerName, roomName, { mode: 'campaign', difficulty: 'normal', historical: true });
+    const h = new HostSession(ctl.world, ctl.playerId, ctl.playerName, roomName, { mode: 'campaign', difficulty: 'normal', historical: true }, true);
     h.onLobby = () => force((x) => x + 1);
     h.onStart = (sim) => begin(sim, h);
     setRoom(h);
@@ -216,7 +217,7 @@ export function Lobby() {
   };
   const join = (code: string) => {
     saveName();
-    const cl = new ClientSession(ctl.world, ctl.playerId, ctl.playerName, code);
+    const cl = new ClientSession(ctl.world, ctl.playerId, ctl.playerName, code, true);
     cl.onLobby = () => force((x) => x + 1);
     cl.onStart = (sim) => begin(sim, cl);
     cl.onError = (t) => ctl.toast(t, 'error');
@@ -236,11 +237,15 @@ export function Lobby() {
           <div class="panel-head"><h2 class="panel-title">Мультиплеер</h2><button class="btn sm ghost" onClick={click(() => { ctl.screen = 'menu'; ctl.bump(); })}>← Назад</button></div>
           <div class="panel-body col">
             <label class="col small"><span class="caps">Позывной</span><input type="text" value={name} maxLength={20} onInput={(e) => setName((e.target as HTMLInputElement).value)} /></label>
-            <div class="small muted">{netMode() === 'online' ? `Онлайн через Supabase · ${new URL(supabaseConfig()!.url).hostname}` : 'Supabase не подключён: комнаты видны только во вкладках этого браузера. Добавьте ключи в «Настройки → Сеть».'}</div>
+            <div class="small muted">{netMode() === 'online' ? `Онлайн через Supabase · ${new URL(supabaseConfig()!.url).hostname}` : 'Онлайн: прямое P2P-соединение браузеров (PeerJS). Хосту достаточно сообщить код комнаты.'}</div>
+            <form class="row" onSubmit={(e) => { e.preventDefault(); const v = joinCode.trim().toUpperCase(); if (v.length >= 4) join(v); }}>
+              <input type="text" class="grow mono" placeholder="Код комнаты" maxLength={8} value={joinCode} onInput={(e) => setJoinCode((e.target as HTMLInputElement).value.toUpperCase())} />
+              <button class="btn sm" type="submit">Войти</button>
+            </form>
           </div>
           <div class="panel-head" style={{ borderTop: '1px solid var(--line)' }}><h3 class="panel-title" style={{ fontSize: 13 }}>Открытые комнаты</h3><span class="mono dim tiny">{rooms.length}</span></div>
           <div class="country-list">
-            {rooms.length === 0 && <div class="panel-body muted small">Комнат пока нет. Создайте свою — друзья увидят её здесь.</div>}
+            {rooms.length === 0 && <div class="panel-body muted small">Комнат поблизости нет. Чтобы играть через интернет — создайте комнату и отправьте другу её код, либо введите код выше.</div>}
             {rooms.map((r) => (
               <button class="country-row" key={r.code} onClick={() => join(r.code)}>
                 <span class="tier-badge" style={{ width: 'auto', padding: '0 6px' }}>{r.code}</span>
@@ -256,7 +261,7 @@ export function Lobby() {
           <div class="panel-body col">
             <label class="col small"><span class="caps">Название</span><input type="text" value={roomName} maxLength={32} onInput={(e) => setRoomName((e.target as HTMLInputElement).value)} /></label>
             <button class="btn primary lg" onClick={host}>Создать и стать хостом</button>
-            <p class="small muted" style={{ lineHeight: 1.6 }}>Хост считает симуляцию и рассылает состояние игрокам по P2P (WebRTC). Если прямое соединение невозможно — данные идут через сервер. До 16 игроков, остальные страны под управлением ИИ.</p>
+            <p class="small muted" style={{ lineHeight: 1.6 }}>Хост считает симуляцию и рассылает состояние игрокам напрямую по P2P (WebRTC). Друзья подключаются по коду комнаты из любой точки мира — сервер не нужен. До 16 игроков, остальные страны под управлением ИИ.</p>
           </div>
         </div>
       </div>

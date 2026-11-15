@@ -3,8 +3,10 @@ import { createSim, dispatch } from '../game/game';
 import type { Command } from '../game/commands';
 import type { CountryState, GameSettings, GameState, LogEntry, Unit } from '../game/types';
 import type { World } from '../world/world';
-import { openBus, type Bus, type BusMsg } from './bus';
-import { PeerLink, gunzipJson, gzipJson } from './peer';
+import { openBus, supabaseConfig, type Bus, type BusMsg } from './bus';
+import { PeerLink, gunzipJson, gzipJson, type Link } from './peer';
+import { PjsClientBus, PjsHostBus, PjsLink, pjsClient, pjsHost } from './pjs';
+import type { DataConnection } from 'peerjs';
 import { createGame } from '../game/setup';
 
 export interface ChatMsg { from: string; name: string; text: string; to: 'all' | 'allies' | string; t: number }
@@ -70,7 +72,7 @@ export class HostSession implements Session {
   chatLog: ChatMsg[] = [];
   private bus: Bus;
   private lobbyBus: Bus;
-  private links = new Map<string, PeerLink>();
+  private links = new Map<string, Link>();
   private announceTimer: number;
   private deltaT = 0;
   private snapT = 0;
@@ -82,9 +84,16 @@ export class HostSession implements Session {
   onLobby?: () => void;
   onStart?: (sim: Sim) => void;
 
-  constructor(private world: World, private pid: string, name: string, roomName: string, settings: GameSettings) {
+  constructor(private world: World, private pid: string, name: string, roomName: string, settings: GameSettings, online = false) {
     this.lobby = { code: this.code, name: roomName, host: pid, players: [{ pid, name, country: null, host: true, online: true }], settings, started: false, max: 16 };
-    this.bus = openBus('ww-room-' + this.code);
+    if (online && !supabaseConfig()) {
+      // Internet rooms without a configured server: PeerJS public signalling cloud.
+      const bus = new PjsHostBus();
+      this.bus = bus;
+      void pjsHost(bus, this.code, (c) => { this.code = c; this.lobby.code = c; }, () => {
+        if (this.bus === bus) { bus.close(); this.bus = openBus('ww-room-' + this.code); this.bus.onMessage((m) => this.onBus(m)); }
+      });
+    } else this.bus = openBus('ww-room-' + this.code);
     this.lobbyBus = openBus('ww-lobby');
     this.lobbyBus.onMessage((m) => { if (m.type === 'who') this.announce(); });
     this.bus.onMessage((m) => this.onBus(m));
@@ -108,7 +117,7 @@ export class HostSession implements Session {
       p.online = true; p.name = name;
       this.lastSeen.set(m.from, Date.now());
       this.links.get(m.from)?.close();
-      const link = new PeerLink(this.bus, this.pid, m.from, true);
+      const link: Link = m._conn ? new PjsLink(m._conn as DataConnection, m.from) : new PeerLink(this.bus, this.pid, m.from, true);
       link.onMessage = (msg) => this.onPeer(m.from, msg);
       link.onOpen = () => { if (this.sim) void this.sendSnapshot(link, true); };
       this.links.set(m.from, link);
@@ -234,7 +243,7 @@ export class HostSession implements Session {
     for (const [pid, t] of this.lastSeen) if (now - t > 30000 && this.lobby.players.find((x) => x.pid === pid)?.online) this.dropPlayer(pid);
   }
 
-  private async sendSnapshot(l: PeerLink, full: boolean) {
+  private async sendSnapshot(l: Link, full: boolean) {
     if (!this.sim) return;
     const z = await gzipJson(this.sim.s);
     l.send({ k: 'snap', z, full });
@@ -290,7 +299,7 @@ export class ClientSession implements Session {
   sim: Sim | null = null;
   chatLog: ChatMsg[] = [];
   private bus: Bus;
-  private link: PeerLink | null = null;
+  private link: Link | null = null;
   private pingT = 0;
   private applying = Promise.resolve();
   onLobby?: () => void;
@@ -300,8 +309,13 @@ export class ClientSession implements Session {
   onFx?: (fx: Fx[]) => void;
   onKicked?: () => void;
 
-  constructor(private world: World, private pid: string, private name: string, readonly code: string) {
-    this.bus = openBus('ww-room-' + code);
+  constructor(private world: World, private pid: string, private name: string, readonly code: string, online = false) {
+    if (online && !supabaseConfig()) {
+      const bus = new PjsClientBus();
+      this.bus = bus;
+      bus.onLink = (l) => { this.link = l; l.onMessage = (msg) => this.onPeer(msg); };
+      void pjsClient(bus, code, name, () => this.onError?.('Комната недоступна или не существует'));
+    } else this.bus = openBus('ww-room-' + code);
     this.bus.onMessage((m) => this.onBus(m));
     this.bus.send({ type: 'hello', from: pid, data: { name } });
   }

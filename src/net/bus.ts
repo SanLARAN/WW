@@ -1,6 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
 
-export interface BusMsg { type: string; from: string; to?: string; data?: unknown }
+export interface BusMsg { type: string; from: string; to?: string; data?: unknown; _conn?: unknown }
 
 /** Pub/sub message bus used for lobby discovery, signalling and relay fallback. */
 export interface Bus {
