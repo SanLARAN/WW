@@ -7,14 +7,24 @@ import { Sim } from '../src/game/sim';
 
 const tags = ['643', '804', '156', '840']; // RU, UA, CN, US
 const prov = new Uint16Array(W * H); // value = province index + 1
+const nav = new Uint8Array(NAV_W * NAV_H);
 const put = (lat: number, lon: number, pid: number) => {
   const x = Math.floor(((lon + 180) / 360) * W), y = Math.floor(((90 - lat) / 180) * H);
   for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) prov[(y + dy) * W + x + dx] = pid + 1;
 };
 put(55, 37, 0); put(56, 38, 1); put(49, 32, 2); put(38, -97, 3);
+// nav grid: land corridor between the RU and UA blobs so ground pathfinding can connect them.
+const mark = (lat: number, lon: number) => {
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const x = Math.floor(((lon + 180) / 360) * NAV_W) + dx, y = Math.floor(((90 - lat) / 180) * NAV_H) + dy;
+    if (x >= 0 && x < NAV_W && y >= 0 && y < NAV_H) nav[y * NAV_W + x] = 1;
+  }
+};
+for (let t = 0; t <= 1; t += 0.02) mark(56 + (49 - 56) * t, 38 + (32 - 38) * t);
+mark(55, 37); mark(38, -97);
 
 const world = new World({
-  tags, prov, ctry: new Uint8Array(1), nav: new Uint8Array(NAV_W * NAV_H),
+  tags, prov, ctry: new Uint8Array(1), nav,
   pLat: new Float32Array([55, 56, 49, 38]), pLon: new Float32Array([37, 38, 32, -97]),
   pArea: new Float32Array([100, 100, 100, 100]), pCountry: new Uint8Array([0, 0, 1, 3]),
   pTerrain: new Uint8Array(4), pCoastal: new Uint8Array(4), pElev: new Float32Array(4),
@@ -39,7 +49,17 @@ const e1 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' }
 const e2 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' });
 T('improve once + cooldown', e1 === null && typeof e2 === 'string', `e1=${e1} e2=${e2}`);
 
-// 2. Missile strike on neutral = war + grudge + improve blocked.
+// 2a. Neutral territory is closed: move orders rejected, scripted limited strikes don't start wars.
+const ru = sim.spawnUnit('643', 'infantry', 56, 38);
+ru.engaged = 0;
+const relBeforeStrike = R('643', '804');
+const mv0 = dispatch(sim, '643', { t: 'move', units: [ru.id], to: { lat: 49, lon: 32 } });
+T('neutral move rejected', typeof mv0 === 'string' && ru.path.length === 0, `mv0=${mv0}`);
+const lim = sim.launch('643', 'cruise', { lat: 49, lon: 32 }, null, { actOfWar: false });
+T('limited strike flies', typeof lim === 'object');
+T('limited strike ≠ war', !sim.atWar('643', '804'), `rel ${relBeforeStrike}→${R('643', '804')}`);
+
+// 2b. Missile strike on neutral = war + grudge + improve blocked.
 T('pre-war', !sim.atWar('643', '804'));
 dispatch(sim, '643', { t: 'launch', missile: 'cruise', to: { lat: 49, lon: 32 }, count: 1 });
 T('strike => war', sim.atWar('643', '804'), `rel=${R('643', '804')}`);
@@ -48,7 +68,19 @@ T('grudge set', sim.flagUntil(s.countries['804'], 'grudge_', '643') > s.tick);
 const e3 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '804' });
 T('improve blocked at war', e3 === 'Сначала заключите мир', `e3=${e3}`);
 
-// 3. After peace the grudge still blocks improve.
+// 2c. Inside a real war, ground movement into enemy land works.
+const mv1 = dispatch(sim, '643', { t: 'move', units: [ru.id], to: { lat: 49, lon: 32 } });
+T('war move allowed', mv1 === null && ru.path.length > 0, `mv1=${mv1}`);
+hour(24);
+T('unit advanced', Math.hypot(ru.lat - 56, ru.lon - 38) > 0.05, `pos=${ru.lat.toFixed(1)},${ru.lon.toFixed(1)}`);
+
+// 3. After peace the grudge still blocks improve; stranded troops get a withdrawal grace period.
+sim.makePeace('643', '804', false);
+ru.lat = 49; ru.lon = 32; ru.path = []; // stranded inside UA land
+hour(3);
+T('peace grace: no instant re-war', !sim.atWar('643', '804'));
+for (let i = 0; i < 24 * 50 && !sim.atWar('643', '804'); i++) (sim as any).hour();
+T('stranded troops eventually trigger war', sim.atWar('643', '804'));
 sim.makePeace('643', '804', false);
 const e4 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '804' });
 T('improve blocked by grudge', typeof e4 === 'string' && e4.includes('не забудет'), `e4=${e4}`);

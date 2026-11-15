@@ -21,7 +21,7 @@ const ICE: RTCIceServer[] = [
 
 let cached: Promise<typeof import('peerjs').default> | null = null;
 const peerjs = () => (cached ??= import('peerjs').then((m) => m.default));
-const peerOpts = () => ({ debug: 0, config: { iceServers: ICE } });
+const peerOpts = () => ({ debug: 1, config: { iceServers: ICE } });
 
 const enc = (ch: 'b' | 'l', m: unknown) => JSON.stringify({ ch, m });
 const dec = (d: unknown): { ch: string; m: unknown } | null => {
@@ -38,7 +38,7 @@ export class PjsLink implements Link {
   onOpen?: () => void;
   onClose?: () => void;
   private fr = new FrameReader();
-  constructor(private conn: DataConnection, readonly remote: string) {
+  constructor(readonly conn: DataConnection, readonly remote: string) {
     linkOf.set(conn, this);
     if (conn.open) this.ready();
     else conn.on('open', () => this.ready());
@@ -129,7 +129,7 @@ export async function pjsHost(bus: PjsHostBus, code: string, onCode: (code: stri
   const tryPeer = (c: string) => {
     const peer = new Peer(PJS_PREFIX + c, peerOpts());
     let settled = false;
-    peer.on('open', () => { settled = true; bus.attach(peer); });
+    peer.on('open', (id) => { settled = true; console.info('[pjs] host peer open', id); bus.attach(peer); });
     peer.on('error', (e: { type?: string }) => {
       if (e?.type === 'unavailable-id' && !settled) {
         peer.destroy();
@@ -148,10 +148,14 @@ export async function pjsClient(bus: PjsClientBus, code: string, name: string, o
   const peer = new Peer(peerOpts());
   let settled = false;
   peer.on('open', () => {
-    const conn = peer.connect(PJS_PREFIX + code, { serialization: 'none', reliable: true, metadata: { name } });
+    console.info('[pjs] connecting to', PJS_PREFIX + code);
+    let conn: DataConnection;
+    try {
+      conn = peer.connect(PJS_PREFIX + code, { serialization: 'raw', reliable: true, metadata: { name } });
+    } catch (e) { console.warn('[pjs] connect threw', e); onFail(e); return; }
     bus.attach(peer, conn);
     conn.on('open', () => { settled = true; });
-    conn.on('error', (e) => { if (!settled) onFail(e); });
+    conn.on('error', (e) => { console.warn('[pjs] conn err', e); if (!settled) onFail(e); });
   });
   peer.on('error', (e: { type?: string }) => {
     if (e?.type === 'peer-unavailable' || !settled) onFail(e);

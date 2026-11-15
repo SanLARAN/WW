@@ -38,7 +38,7 @@ export const EVENTS: GameEvent[] = [
     text: 'Американский беспилотник MQ-9 Reaper ликвидировал генерала КСИР Касема Сулеймани в аэропорту Багдада. Страна требует возмездия.',
     options: [
       { label: 'Ракетный удар по базе Айн-эль-Асад', tip: '-10 отношений с США, +10 национализма, напряжённость растёт', ai: 0.8, effect: (s, c) => {
-        for (let i = 0; i < 6; i++) s.launch(c.id, 'ballistic', { lat: 33.8 + (s.rng() - 0.5) * 0.1, lon: 42.44 + (s.rng() - 0.5) * 0.1 });
+        for (let i = 0; i < 6; i++) s.launch(c.id, 'ballistic', { lat: 33.8 + (s.rng() - 0.5) * 0.1, lon: 42.44 + (s.rng() - 0.5) * 0.1 }, null, { actOfWar: false });
         s.addRel(c.id, '840', -10); c.nationalism += 10; s.s.tension += 8;
       } },
       { label: 'Проявить сдержанность', tip: '-6 стабильности', ai: 0.2, effect: (_s, c) => { c.stability -= 6; } },

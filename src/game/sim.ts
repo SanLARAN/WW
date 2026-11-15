@@ -172,6 +172,18 @@ export class Sim {
       P.capture[i] = 0; P.captureBy[i] = null;
     }
     this.setRel(a, b, -30);
+    const A = this.c(a), B = this.c(b);
+    if (A && B) {
+      // Troops stranded on the other's soil get 45 days to withdraw before it counts as an incursion.
+      const until = this.s.tick + 45 * 24;
+      this.setFlagUntil(A, 'peace_', b, until);
+      this.setFlagUntil(B, 'peace_', a, until);
+      for (const u of this.s.units) {
+        if (u.owner !== a && u.owner !== b) continue;
+        const p = this.world.provinceAt(u.lat, u.lon);
+        if (p >= 0 && !this.canEnter(u.owner, p)) { u.path = []; u.hold = false; }
+      }
+    }
     this.log(`🕊 Мир между ${this.c(a)!.name} и ${this.c(b)!.name}${annex ? ' (аннексия оккупированных территорий)' : ''}`, 'diplo');
     this.fx.push({ k: 'peace', a, b });
     this.checkAlive();
@@ -229,8 +241,13 @@ export class Sim {
       if (!p) return false;
       u.path = p; return true;
     }
-    let p = this.world.findPath(u.lat, u.lon, lat, lon, 1, 40000);
-    if (!p) p = this.world.findPath(u.lat, u.lon, lat, lon, 3, 40000); // amphibious: land + sea
+    // Land routes respect borders: own/allied/enemy land only — neutral soil is impassable.
+    // Exception: the country a unit is already inside of, so post-war leftovers can withdraw.
+    const here = this.world.provinceAt(u.lat, u.lon);
+    const transit = here >= 0 ? this.s.prov.ctrl[here] : null;
+    const ok = u.type === 'drones' ? undefined : (p: number) => p < 0 || this.s.prov.ctrl[p] === transit || this.canEnter(u.owner, p);
+    let p = this.world.findPath(u.lat, u.lon, lat, lon, 1, 40000, ok);
+    if (!p) p = this.world.findPath(u.lat, u.lon, lat, lon, 3, 40000, ok); // amphibious: land + sea
     if (!p) return false;
     u.path = p;
     return true;
@@ -332,21 +349,35 @@ export class Sim {
     return (adj ? 0.85 : 0.55) * terr * oil;
   }
 
+  /** May `owner`'s troops be inside province `p`? Own soil, allies/co-belligerents and war enemies — yes. */
+  canEnter(owner: string, p: number): boolean {
+    const wc = this.s.prov.ctrl[p];
+    return wc === owner || wc === '010' || this.friendly(wc, owner) || this.atWar(wc, owner);
+  }
+
   private moveUnits() {
     for (const u of this.s.units) {
       if (!u.path.length) continue;
       const st = UNIT[u.type];
       if (st.domain === 'land' && u.engaged === 0 && u.type !== 'drones') continue; // pinned by combat
       let km = st.speed;
+      let myP = -1;
       if (st.domain === 'land') {
-        const p = this.world.provinceAt(u.lat, u.lon);
-        const onLand = p >= 0;
-        km *= onLand ? TERRAIN_INFO[this.world.provinces[p].terrain].move * this.weather(u.lat).move : 12;
+        myP = this.world.provinceAt(u.lat, u.lon);
+        const onLand = myP >= 0;
+        km *= onLand ? TERRAIN_INFO[this.world.provinces[myP].terrain].move * this.weather(u.lat).move : 12;
         if (u.type === 'drones') km = st.speed;
         km *= 0.5 + u.org / 200;
       }
       while (km > 0 && u.path.length) {
         const wp = u.path[0];
+        if (st.domain === 'land' && u.type !== 'drones') {
+          const wpP = this.world.provinceAt(wp.lat, wp.lon);
+          if (wpP >= 0 && !this.canEnter(u.owner, wpP)) {
+            // Already inside neutral soil? Allowed to keep moving (withdrawal), else halt at the border.
+            if (myP < 0 || this.canEnter(u.owner, myP)) { u.path = []; break; }
+          }
+        }
         const d = distKm(u.lat, u.lon, wp.lat, wp.lon);
         const r = stepToward(u.lat, u.lon, wp.lat, wp.lon, km);
         u.lat = r.lat; u.lon = r.lon;
@@ -471,9 +502,13 @@ export class Sim {
       if (p < 0) continue;
       const ctrl = P.ctrl[p];
       if (ctrl !== u.owner && ctrl !== '010' && !this.atWar(ctrl, u.owner) && !this.friendly(ctrl, u.owner)) {
-        this.log(`⚡ Войска ${this.c(u.owner)!.name} вторглись на территорию ${this.c(ctrl)!.name}!`, 'war');
-        this.declareWar(u.owner, ctrl, 'none');
-        this.addGrudge(ctrl, u.owner, 1095);
+        const cc = this.c(ctrl);
+        // Grace period after a peace deal: leftover troops are expected to withdraw.
+        if (!cc || this.flagUntil(cc, 'peace_', u.owner) <= this.s.tick) {
+          this.log(`⚡ Войска ${this.c(u.owner)!.name} вторглись на территорию ${this.c(ctrl)!.name}!`, 'war');
+          this.declareWar(u.owner, ctrl, 'none');
+          this.addGrudge(ctrl, u.owner, 1095);
+        }
       }
       if (ctrl === u.owner || !this.atWar(ctrl, u.owner)) {
         // Liberation of allied land
@@ -527,7 +562,7 @@ export class Sim {
     return best && bd <= range ? best : null;
   }
 
-  launch(owner: string, type: MissileType, to: LL, targetUnit: number | null = null): Missile | string {
+  launch(owner: string, type: MissileType, to: LL, targetUnit: number | null = null, opts?: { actOfWar?: boolean }): Missile | string {
     const c = this.c(owner);
     if (!c) return 'Нет страны';
     const err = this.canUseMissile(c, type);
@@ -550,10 +585,16 @@ export class Sim {
     if (victim === '010') victim = null;
     if (victim && victim !== owner) {
       if (!this.atWar(owner, victim)) {
-        this.log(`⚡ ${c.name} наносит удар без объявления войны: ${this.c(victim)?.name}`, 'war');
-        this.declareWar(owner, victim, 'none');
-      }
-      this.addGrudge(victim, owner, 1095);
+        if (opts?.actOfWar === false) {
+          // Limited strike (scripted exchanges, proxy attacks): hurts relations but no open war.
+          this.addRel(owner, victim, -15);
+          this.addGrudge(victim, owner, 365);
+        } else {
+          this.log(`⚡ ${c.name} наносит удар без объявления войны: ${this.c(victim)?.name}`, 'war');
+          this.declareWar(owner, victim, 'none');
+          this.addGrudge(victim, owner, 1095);
+        }
+      } else this.addGrudge(victim, owner, 1095);
     }
     // Interception roll by hostile air defences covering the target.
     const ads = this.s.units.filter((u) => u.type === 'airdef' && u.ammo >= 1 && u.owner !== owner && (this.atWar(u.owner, owner) || (defender && this.friendly(u.owner, defender) && this.atWar(defender, owner))));

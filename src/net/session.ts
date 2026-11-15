@@ -116,11 +116,17 @@ export class HostSession implements Session {
       }
       p.online = true; p.name = name;
       this.lastSeen.set(m.from, Date.now());
-      this.links.get(m.from)?.close();
-      const link: Link = m._conn ? new PjsLink(m._conn as DataConnection, m.from) : new PeerLink(this.bus, this.pid, m.from, true);
-      link.onMessage = (msg) => this.onPeer(m.from, msg);
-      link.onOpen = () => { if (this.sim) void this.sendSnapshot(link, true); };
-      this.links.set(m.from, link);
+      {
+        const existing = this.links.get(m.from);
+        const same = m._conn && existing instanceof PjsLink && existing.conn === m._conn;
+        if (!same) {
+          existing?.close();
+          const link: Link = m._conn ? new PjsLink(m._conn as DataConnection, m.from) : new PeerLink(this.bus, this.pid, m.from, true);
+          link.onMessage = (msg) => this.onPeer(m.from, msg);
+          link.onOpen = () => { if (this.sim) void this.sendSnapshot(link, true); };
+          this.links.set(m.from, link);
+        }
+      }
       this.pushLobby();
       return;
     }
@@ -313,7 +319,7 @@ export class ClientSession implements Session {
     if (online && !supabaseConfig()) {
       const bus = new PjsClientBus();
       this.bus = bus;
-      bus.onLink = (l) => { this.link = l; l.onMessage = (msg) => this.onPeer(msg); };
+      bus.onLink = (l) => { this.link = l; l.onMessage = (msg) => this.onPeer(msg); l.onClose = () => { this.link = null; }; };
       void pjsClient(bus, code, name, () => this.onError?.('Комната недоступна или не существует'));
     } else this.bus = openBus('ww-room-' + code);
     this.bus.onMessage((m) => this.onBus(m));

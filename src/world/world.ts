@@ -110,12 +110,19 @@ export class World {
     return { lat: 90 - ((y + 0.5) / NAV_H) * 180, lon: ((x + 0.5) / NAV_W) * 360 - 180 };
   }
 
-  /** A* on the nav grid. mask: 1 = land units, 2 = naval units. Returns waypoints or null. */
-  findPath(lat1: number, lon1: number, lat2: number, lon2: number, mask: number, maxNodes = 60000): { lat: number; lon: number }[] | null {
+  /** Province index at nav-cell centre, or -1 for water/uninhabited. */
+  private cellProv(c: number): number {
+    const x = c % NAV_W, y = (c / NAV_W) | 0;
+    return this.prov[Math.min(H - 1, y * 4 + 2) * W + Math.min(W - 1, x * 4 + 2)] - 1;
+  }
+
+  /** A* on the nav grid. mask: 1 = land units, 2 = naval units. `ok` optionally vetoes cells by province (-1 = water). */
+  findPath(lat1: number, lon1: number, lat2: number, lon2: number, mask: number, maxNodes = 60000, ok?: (p: number) => boolean): { lat: number; lon: number }[] | null {
     const start = this.navCell(lat1, lon1), goal = this.navCell(lat2, lon2);
     if (!(this.nav[goal] & mask)) return null;
+    if (ok && !ok(this.cellProv(goal))) return null;
     if (start === goal) return [{ lat: lat2, lon: lon2 }];
-    if (this.lineClear(lat1, lon1, lat2, lon2, mask)) return [{ lat: lat2, lon: lon2 }];
+    if (this.lineClear(lat1, lon1, lat2, lon2, mask, ok)) return [{ lat: lat2, lon: lon2 }];
     const g = new Map<number, number>(), came = new Map<number, number>();
     const heap = new MinHeap();
     const gy = (goal / NAV_W) | 0, gx = goal % NAV_W;
@@ -140,6 +147,7 @@ export class World {
         if (ny < 0 || ny >= NAV_H) continue;
         const nx = (x + dx + NAV_W) % NAV_W, n = ny * NAV_W + nx;
         if (!(this.nav[n] & mask)) continue;
+        if (ok && !ok(this.cellProv(n))) continue;
         const ng = gc + Math.hypot(dx * cl, dy);
         if (ng < (g.get(n) ?? Infinity)) { g.set(n, ng); came.set(n, c); heap.push(n, ng + h(n)); }
       }
@@ -155,20 +163,22 @@ export class World {
     let cur = { lat: lat1, lon: lon1 }, i = 0;
     while (i < pts.length) {
       let j = pts.length - 1;
-      while (j > i && !this.lineClear(cur.lat, cur.lon, pts[j].lat, pts[j].lon, mask)) j = Math.max(i, j - Math.max(1, ((j - i) / 4) | 0));
+      while (j > i && !this.lineClear(cur.lat, cur.lon, pts[j].lat, pts[j].lon, mask, ok)) j = Math.max(i, j - Math.max(1, ((j - i) / 4) | 0));
       out.push(pts[j]); cur = pts[j]; i = j + 1;
     }
     return out;
   }
 
-  lineClear(lat1: number, lon1: number, lat2: number, lon2: number, mask: number): boolean {
+  lineClear(lat1: number, lon1: number, lat2: number, lon2: number, mask: number, ok?: (p: number) => boolean): boolean {
     const d = distKm(lat1, lon1, lat2, lon2);
     const steps = Math.max(2, Math.ceil(d / 15));
     let dLon = lon2 - lon1;
     if (dLon > 180) dLon -= 360; else if (dLon < -180) dLon += 360;
     for (let s = 1; s < steps; s++) {
       const t = s / steps;
-      if (!(this.nav[this.navCell(lat1 + (lat2 - lat1) * t, lon1 + dLon * t)] & mask)) return false;
+      const cell = this.navCell(lat1 + (lat2 - lat1) * t, lon1 + dLon * t);
+      if (!(this.nav[cell] & mask)) return false;
+      if (ok && !ok(this.cellProv(cell))) return false;
     }
     return true;
   }

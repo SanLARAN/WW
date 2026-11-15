@@ -62,17 +62,20 @@ export function applyCommand(sim: Sim, country: string, cmd: Command): string | 
   if (!c || !c.alive) return 'Страна недоступна';
   switch (cmd.t) {
     case 'move': {
-      let ok = 0;
+      let ok = 0, blocked = false;
+      const dp = sim.world.provinceAt(cmd.to.lat, cmd.to.lon);
       for (const id of cmd.units) {
         const u = sim.unit(id);
         if (!u || u.owner !== country) continue;
+        if (dp >= 0 && UNIT[u.type].domain === 'land' && u.type !== 'drones' && !sim.canEnter(country, dp)) { blocked = true; continue; }
         if (UNIT[u.type].domain === 'air') {
           const d = Math.hypot(cmd.to.lat - u.lat, cmd.to.lon - u.lon) * 111;
           if (d > 3000) continue;
         }
         if (sim.orderMove(u, cmd.to.lat + (ok % 3 - 1) * 0.06, cmd.to.lon + (((ok / 3) | 0) % 3 - 1) * 0.06)) { u.hold = false; ok++; }
       }
-      return ok ? null : 'Нет пути';
+      if (ok) return null;
+      return blocked ? 'Чужая территория — сначала объявите войну или договоритесь о доступе' : 'Нет пути';
     }
     case 'hold': for (const id of cmd.units) { const u = sim.unit(id); if (u?.owner === country) { u.path = []; u.hold = true; } } return null;
     case 'disband': for (const id of cmd.units) { const u = sim.unit(id); if (u?.owner === country) { sim.removeUnit(u); c.manpower += UNIT[u.type].manpower * u.str * 0.005; } } return null;
