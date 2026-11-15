@@ -25,7 +25,7 @@ export type Command =
   | { t: 'event'; key: number; option: number }
   | { t: 'speed'; speed: number };
 
-export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'joinWar' | 'acceptPeace' | 'declinePeace';
+export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'callToArms' | 'acceptCall' | 'declineCall' | 'joinWar' | 'acceptPeace' | 'declinePeace';
 
 export const DIPLO_INFO: Record<DiploAction, { name: string; cost: number; desc: string; hostile?: boolean }> = {
   improve: { name: 'Улучшить отношения', cost: 1, desc: '+8 к отношениям (макс. +30). Раз в 45 дней. Не работает в войне и пока цель помнит удары.' },
@@ -46,6 +46,9 @@ export const DIPLO_INFO: Record<DiploAction, { name: string; cost: number; desc:
   peace: { name: 'Предложить белый мир', cost: 0, desc: 'Возврат к довоенным границам.' },
   peaceAnnex: { name: 'Потребовать капитуляции', cost: 0, desc: 'Аннексия оккупированных территорий. Принимают при разгроме.' },
   callAllies: { name: 'Призвать союзников', cost: 0, desc: 'Попросить военных союзников вступить в вашу войну.' },
+  callToArms: { name: 'Призвать к оружию', cost: 0, desc: 'Попросить союзника вступить в ваши войны. Раз в 90 дней на страну.' },
+  acceptCall: { name: 'Ответить на призыв', cost: 0, desc: 'Вступить в войну на стороне союзника.' },
+  declineCall: { name: 'Отклонить призыв', cost: 0, desc: 'Отказаться вступать в войну.' },
   joinWar: { name: 'Вступить в войну на их стороне', cost: 0, desc: 'Присоединиться к их войне.' },
   acceptPeace: { name: 'Принять мир', cost: 0, desc: 'Принять предложенные условия мира.' },
   declinePeace: { name: 'Отклонить мир', cost: 0, desc: 'Продолжить войну.' },
@@ -160,6 +163,21 @@ export function applyCommand(sim: Sim, country: string, cmd: Command): string | 
 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+
+/** Willingness of ally `a` to join `c`'s wars: relations, aggression, own fatigue and enemy strength. */
+function callToArmsScore(sim: Sim, c: CountryState, a: CountryState): number {
+  const power = (x: CountryState) => sim.s.units.filter((u) => u.owner === x.id).reduce((s, u) => s + u.str, 0) * (1 + x.tech * 0.05);
+  const foes = new Set<string>();
+  for (const w of sim.s.wars) { const s = sim.sideOf(w, c.id); if (s) for (const id of s === 'a' ? w.defenders : w.attackers) foes.add(id); }
+  let foePower = 0;
+  for (const id of foes) { const e = sim.c(id); if (e) foePower += power(e); }
+  const myPower = power(a);
+  let score = sim.rel(a.id, c.id) * 0.6 + a.aggression * 40 - a.warExhaustion * 0.5 - sim.enemiesOf(a.id).length * 15;
+  if (a.stability < 35) score -= 20;
+  if (myPower < foePower * 0.5) score -= 30;
+  if (myPower < foePower * 0.25) score -= 30;
+  return score;
+}
 
 function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, arg?: number | string): string | null {
   const T = sim.c(target);
@@ -294,13 +312,57 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
     case 'callAllies': {
       const war = sim.s.wars.find((w) => sim.sideOf(w, c.id) && sim.sideOf(w, target));
       if (!war || !sim.atWar(c.id, target)) return 'Цель должна быть вашим противником';
+      const side = sim.sideOf(war, c.id)!;
+      const defensive = war.defenders.includes(c.id);
       let n = 0;
       for (const a of sim.militaryAllies(c.id)) {
-        const A = sim.c(a)!;
-        if (sim.sideOf(war, a) || A.player) continue;
-        if (sim.rel(a, c.id) > 50 && sim.rng() < 0.7) { sim.joinWar(a, war, sim.sideOf(war, c.id)!); n++; }
+        const A = sim.c(a);
+        if (!A || sim.sideOf(war, a)) continue;
+        if (A.player) {
+          if (!A.flags.includes(`calltoarms_${c.id}`)) { A.flags.push(`calltoarms_${c.id}`); sim.log(`📣 ${c.name} призывает вас к оружию — откройте «Дипломатию», чтобы ответить`, 'diplo', a); n++; }
+          continue;
+        }
+        if (callToArmsScore(sim, c, A) + (defensive ? 15 : 0) > 30) { sim.joinWar(a, war, side); n++; }
+        else sim.addRel(c.id, a, -5);
       }
       return n ? null : 'Союзники отказались';
+    }
+    case 'callToArms': {
+      const joinable = sim.s.wars.filter((w) => sim.sideOf(w, c.id) && !sim.sideOf(w, target));
+      if (!joinable.length) return sim.s.wars.some((w) => sim.sideOf(w, c.id)) ? 'Они уже воюют на вашей стороне' : 'Вы ни с кем не воюете';
+      if (!sim.militaryAllies(c.id).includes(target) && rel < 40) return 'Нужен военный союз или отношения > 40';
+      const cd = sim.flagUntil(c, 'cta_', target);
+      if (cd > sim.s.tick) return `Военный запрос уже отправлен: повторно через ${Math.ceil((cd - sim.s.tick) / 24)} дн.`;
+      sim.setFlagUntil(c, 'cta_', target, sim.s.tick + 24 * 90);
+      if (T.player) {
+        if (!T.flags.includes(`calltoarms_${c.id}`)) T.flags.push(`calltoarms_${c.id}`);
+        sim.log(`📣 ${c.name} призывает вас к оружию — откройте «Дипломатию», чтобы ответить`, 'diplo', target);
+        return null;
+      }
+      const defensive = joinable.some((w) => w.defenders.includes(c.id));
+      if (callToArmsScore(sim, c, T) + (defensive ? 15 : 0) > 30) {
+        for (const w of joinable) sim.joinWar(target, w, sim.sideOf(w, c.id)!);
+        return null;
+      }
+      sim.addRel(c.id, target, -8);
+      return `${T.name} отказалась вступать в войну`;
+    }
+    case 'acceptCall': {
+      const flag = `calltoarms_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет призыва';
+      c.flags = c.flags.filter((f) => f !== flag);
+      let n = 0;
+      for (const w of sim.s.wars.filter((w) => sim.sideOf(w, target) && !sim.sideOf(w, c.id))) { sim.joinWar(c.id, w, sim.sideOf(w, target)!); n++; }
+      if (!n) return 'Война уже окончена';
+      return null;
+    }
+    case 'declineCall': {
+      const flag = `calltoarms_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет призыва';
+      c.flags = c.flags.filter((f) => f !== flag);
+      sim.addRel(target, c.id, -8);
+      if (T.player) sim.log(`${c.name} отклоняет ваш призыв к оружию`, 'diplo', target);
+      return null;
     }
     case 'acceptPeace': {
       const flag = c.flags.find((f) => f.startsWith('peaceoffer_' + target + '_'));

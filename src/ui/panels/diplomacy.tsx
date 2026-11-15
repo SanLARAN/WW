@@ -19,6 +19,7 @@ export function DiplomacyPanel() {
   const all = Object.values(sim.s.countries).filter((c) => c.alive && c.id !== me.id && (!q || c.name.toLowerCase().includes(q.toLowerCase())));
   all.sort((a, b) => (sim.atWar(me.id, b.id) ? 1 : 0) - (sim.atWar(me.id, a.id) ? 1 : 0) || b.gdp - a.gdp);
   const offers = me.flags.filter((f) => f.startsWith('peaceoffer_'));
+  const calls = me.flags.filter((f) => f.startsWith('calltoarms_'));
   return (
     <div class="row" style={{ alignItems: 'stretch', gap: 12, height: '100%' }}>
       <div class="col" style={{ width: 200, minHeight: 0 }}>
@@ -38,6 +39,16 @@ export function DiplomacyPanel() {
         </div>
       </div>
       <div class="grow col" style={{ minWidth: 0, overflow: 'auto' }}>
+        {calls.map((f) => {
+          const fc = sim.c(f.slice(11));
+          return fc ? (
+            <div class="card" key={f} style={{ borderColor: 'var(--warn)' }}>
+              <b class="small">⚔ {fc.name} призывает вас к оружию — просит вступить в войну на её стороне</b>
+              <div class="row"><button class="btn sm primary" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'acceptCall', target: fc.id }))}>Вступить в войну</button>
+                <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'declineCall', target: fc.id }))}>Отказаться</button></div>
+            </div>
+          ) : null;
+        })}
         {offers.map((f) => {
           const [, from, kind] = f.split('_');
           const fc = sim.c(from);
@@ -101,6 +112,9 @@ export function DiplomacyPanel() {
               ))}
               {sim.s.wars.some((w) => sim.sideOf(w, target.id)) && !war && (
                 <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'joinWar', target: target.id }))}>Вступить в войну на их стороне</button>
+              )}
+              {!war && (ally || r > 40) && sim.s.wars.some((w) => sim.sideOf(w, me.id) && !sim.sideOf(w, target.id)) && (
+                <button class="btn sm primary" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'callToArms', target: target.id }))}>📣 Призвать к оружию</button>
               )}
             </>
           );

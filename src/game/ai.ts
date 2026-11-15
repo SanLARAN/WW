@@ -91,6 +91,10 @@ function diplomacy(sim: Sim, c: CountryState, diff: number) {
       if (allied && side === 'd' && sim.rel(c.id, leader) > 40 && sim.rng() < 0.15) sim.joinWar(c.id, w, side);
     }
   }
+  // Call allies for help when the war is going badly.
+  if (sim.inWar(c.id) && c.warExhaustion > 30 && sim.rng() < 0.15) {
+    for (const a of sim.militaryAllies(c.id)) applyCommand(sim, c.id, { t: 'diplo', action: 'callToArms', target: a });
+  }
   // Drift relations a bit toward neighbours' baseline, sanction hated rivals.
   for (const o of Object.values(s.countries)) {
     if (o.id === c.id || !o.alive) continue;

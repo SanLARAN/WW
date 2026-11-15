@@ -12,7 +12,7 @@ const put = (lat: number, lon: number, pid: number) => {
   const x = Math.floor(((lon + 180) / 360) * W), y = Math.floor(((90 - lat) / 180) * H);
   for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) prov[(y + dy) * W + x + dx] = pid + 1;
 };
-put(55, 37, 0); put(56, 38, 1); put(49, 32, 2); put(38, -97, 3);
+put(55, 37, 0); put(56, 38, 1); put(49, 32, 2); put(38, -97, 3); put(30, 110, 4);
 // nav grid: land corridor between the RU and UA blobs so ground pathfinding can connect them.
 const mark = (lat: number, lon: number) => {
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -25,11 +25,11 @@ mark(55, 37); mark(38, -97);
 
 const world = new World({
   tags, prov, ctry: new Uint8Array(1), nav,
-  pLat: new Float32Array([55, 56, 49, 38]), pLon: new Float32Array([37, 38, 32, -97]),
-  pArea: new Float32Array([100, 100, 100, 100]), pCountry: new Uint8Array([0, 0, 1, 3]),
-  pTerrain: new Uint8Array(4), pCoastal: new Uint8Array(4), pElev: new Float32Array(4),
-  pLight: new Float32Array(4),
-  adjOffsets: new Uint32Array([0, 1, 3, 4, 4]), adjList: new Uint32Array([1, 0, 2, 1]),
+  pLat: new Float32Array([55, 56, 49, 38, 30]), pLon: new Float32Array([37, 38, 32, -97, 110]),
+  pArea: new Float32Array([100, 100, 100, 100, 100]), pCountry: new Uint8Array([0, 0, 1, 3, 2]),
+  pTerrain: new Uint8Array(5), pCoastal: new Uint8Array(5), pElev: new Float32Array(5),
+  pLight: new Float32Array(5),
+  adjOffsets: new Uint32Array([0, 1, 3, 4, 4, 4]), adjList: new Uint32Array([1, 0, 2, 1]),
 });
 
 const s = createGame(world, { mode: 'campaign', difficulty: 'normal', historical: false });
@@ -71,6 +71,24 @@ T('war log', s.log.some((l) => l.text.includes('без объявления во
 T('grudge set', sim.flagUntil(s.countries['804'], 'grudge_', '643') > s.tick);
 const e3 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '804' });
 T('improve blocked at war', e3 === 'Сначала заключите мир', `e3=${e3}`);
+
+// 2d. Call to arms: AI ally joins, player ally gets a request flag, refusal clears it, 90-day cooldown.
+s.countries['643'].alliances.push('X643');
+s.countries['156'].alliances.push('X643');
+s.countries['840'].alliances.push('X643');
+sim.invalidateAllies();
+const e6 = dispatch(sim, '643', { t: 'diplo', action: 'callToArms', target: '156' });
+const w643 = s.wars.find((w) => sim.sideOf(w, '643'));
+T('ally joins war', e6 === null && !!w643 && !!sim.sideOf(w643, '156'), `e6=${e6}`);
+s.countries['840'].player = 'x';
+const e7 = dispatch(sim, '643', { t: 'diplo', action: 'callToArms', target: '840' });
+T('player ally gets request', e7 === null && s.countries['840'].flags.includes('calltoarms_643'), `e7=${e7}`);
+const e8 = dispatch(sim, '840', { t: 'diplo', action: 'declineCall', target: '643' });
+T('decline clears request', e8 === null && !s.countries['840'].flags.includes('calltoarms_643'), `e8=${e8}`);
+const e9 = dispatch(sim, '643', { t: 'diplo', action: 'callToArms', target: '156' });
+T('already-on-side message', typeof e9 === 'string', `e9=${e9}`);
+const e9b = dispatch(sim, '643', { t: 'diplo', action: 'callToArms', target: '840' });
+T('call-to-arms cooldown', typeof e9b === 'string' && e9b.includes('уже отправлен'), `e9b=${e9b}`);
 
 // 2c. Inside a real war, ground movement into enemy land works.
 const mv1 = dispatch(sim, '643', { t: 'move', units: [ru.id], to: { lat: 49, lon: 32 } });
