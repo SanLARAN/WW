@@ -52,7 +52,7 @@ export function Hud() {
       {c.box && <div class="boxsel" style={{ left: Math.min(c.box.x0, c.box.x1), top: Math.min(c.box.y0, c.box.y1), width: Math.abs(c.box.x1 - c.box.x0), height: Math.abs(c.box.y1 - c.box.y0) }} />}
       {c.targeting && (
         <div class="target-banner">
-          <span>🎯 Наведение: <b>{MISSILE[c.targeting.missile].name}</b> ×{c.targeting.count} — ЛКМ по цели, Shift — серия, ПКМ — отмена</span>
+          <span>🎯 Наведение: <b>{MISSILE[c.targeting.missile].name}</b> ×{c.targeting.count} — ЛКМ по цели, Shift — серия, ПКМ — отмена{c.targetWarn ? <b style="color:#ff9d97"> — ⚠ удар по «{c.targetWarn}» будет объявлением войны!</b> : null}</span>
           <button class="btn sm danger" onClick={click(() => { c.targeting = null; c.bump(); })}>Отмена</button>
         </div>
       )}

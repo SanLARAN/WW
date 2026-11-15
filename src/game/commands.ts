@@ -28,7 +28,7 @@ export type Command =
 export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'joinWar' | 'acceptPeace' | 'declinePeace';
 
 export const DIPLO_INFO: Record<DiploAction, { name: string; cost: number; desc: string; hostile?: boolean }> = {
-  improve: { name: 'Улучшить отношения', cost: 0.5, desc: '+12 к отношениям. Стоит $0.5 млрд.' },
+  improve: { name: 'Улучшить отношения', cost: 1, desc: '+8 к отношениям (макс. +30). Раз в 45 дней. Не работает в войне и пока цель помнит удары.' },
   insult: { name: 'Дипломатический демарш', cost: 0, desc: '-20 к отношениям, +5 национализма.', hostile: true },
   sanction: { name: 'Ввести санкции', cost: 0, desc: 'Бьёт по экономике цели пропорционально вашему ВВП. -25 к отношениям.', hostile: true },
   unsanction: { name: 'Снять санкции', cost: 0, desc: '+10 к отношениям.' },
@@ -170,9 +170,19 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
   const notify = (text: string) => { if (T.player) sim.log(text, 'diplo', T.id); };
   c.budget -= info.cost;
   switch (action) {
-    case 'improve': sim.addRel(c.id, target, 12); return null;
-    case 'insult': sim.addRel(c.id, target, -20); c.nationalism += 5; notify(`${c.name} выразила вам дипломатический протест`); return null;
-    case 'sanction': if (!c.sanctions.includes(target)) { c.sanctions.push(target); sim.addRel(c.id, target, -25); sim.log(`🚫 ${c.name} вводит санкции против ${T.name}`, 'diplo'); } return null;
+    case 'improve': {
+      if (atWar) return 'Сначала заключите мир';
+      const g = sim.flagUntil(T, 'grudge_', c.id);
+      if (g > sim.s.tick) return `${T.name} не забудет ваши действия ещё ~${Math.ceil((g - sim.s.tick) / 24 / 30)} мес.`;
+      const cd = sim.flagUntil(c, 'relcd_', target);
+      if (cd > sim.s.tick) return `Дипломатический канал занят: повторно через ${Math.ceil((cd - sim.s.tick) / 24)} дн.`;
+      if (rel >= 30) return 'Отношения уже тёплые — дальше только союз и совместные дела';
+      sim.addRel(c.id, target, 8);
+      sim.setFlagUntil(c, 'relcd_', target, sim.s.tick + 24 * 45);
+      return null;
+    }
+    case 'insult': sim.addRel(c.id, target, -20); c.nationalism += 5; sim.addGrudge(target, c.id, 30); notify(`${c.name} выразила вам дипломатический протест`); return null;
+    case 'sanction': if (!c.sanctions.includes(target)) { c.sanctions.push(target); sim.addRel(c.id, target, -25); sim.addGrudge(target, c.id, 180); sim.log(`🚫 ${c.name} вводит санкции против ${T.name}`, 'diplo'); } return null;
     case 'unsanction': c.sanctions = c.sanctions.filter((x) => x !== target); sim.addRel(c.id, target, 10); return null;
     case 'alliance': {
       const ideo = c.ideology.reduce((s, v, k) => s + Math.abs(v - T.ideology[k]), 0) / 4;

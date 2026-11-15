@@ -52,6 +52,7 @@ export class Controller {
   hoverProvince = -1;
   hoverPos: { x: number; y: number } | null = null;
   targeting: { missile: MissileType; count: number } | null = null;
+  targetWarn: string | null = null;
   box: { x0: number; y0: number; x1: number; y1: number } | null = null;
   toasts: Toast[] = [];
   private toastId = 1;
@@ -436,6 +437,12 @@ export class Controller {
         this.hoverProvince = p;
         this.engine.globe.material.uniforms.hoverId.value = p + 1 || -1;
       }
+      let warn: string | null = null;
+      if (this.targeting && this.sim && this.me && p >= 0) {
+        const ctrl = this.sim.s.prov.ctrl[p];
+        if (ctrl !== this.me && ctrl !== '010' && !this.sim.atWar(this.me, ctrl)) warn = this.sim.c(ctrl)?.name ?? null;
+      }
+      if (warn !== this.targetWarn) { this.targetWarn = warn; this.bump(); }
     };
     ctl.onClick = (e) => {
       audio.unlock();

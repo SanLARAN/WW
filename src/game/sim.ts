@@ -95,12 +95,31 @@ export class Sim {
   mod(c: CountryState, key: string) { return c.modifiers[key] ?? 0; }
   addMod(c: CountryState, key: string, v: number) { c.modifiers[key] = (c.modifiers[key] ?? 0) + v; }
 
+  /** Timed flag on a country ("<prefix><key>_<untilTick>"). */
+  flagUntil(c: CountryState, prefix: string, key: string): number {
+    const p = prefix + key + '_';
+    const f = c.flags.find((x) => x.startsWith(p));
+    return f ? +f.slice(p.length) || 0 : 0;
+  }
+  setFlagUntil(c: CountryState, prefix: string, key: string, until: number) {
+    const p = prefix + key + '_';
+    if (c.flags.some((x) => x.startsWith(p))) c.flags = c.flags.filter((x) => !x.startsWith(p));
+    if (until > this.s.tick) c.flags.push(p + Math.round(until));
+  }
+  /** Country `holder` remembers harm done by `toward` for `days`. Blocks cheap diplomacy. */
+  addGrudge(holder: string, toward: string, days: number) {
+    const c = this.c(holder);
+    if (!c || holder === toward) return;
+    this.setFlagUntil(c, 'grudge_', toward, Math.max(this.flagUntil(c, 'grudge_', toward), this.s.tick + days * 24));
+  }
+
   declareWar(att: string, def: string, cb: string): War | null {
     const A = this.c(att), D = this.c(def);
     if (!A || !D || att === def || this.atWar(att, def)) return null;
     const war: War = { id: this.s.nextId++, name: `${A.name} против ${D.name}`, attackers: [att], defenders: [def], start: this.s.tick, cb };
     this.s.wars.push(war);
     this.setRel(att, def, -100);
+    this.addGrudge(def, att, 1825); this.addGrudge(att, def, 365);
     const unjust = cb === 'none';
     A.opinion -= unjust ? 35 : 10;
     this.s.tension = Math.min(100, this.s.tension + (tierRank(D.tier) <= 2 || tierRank(A.tier) <= 2 ? 15 : 6));
@@ -112,9 +131,10 @@ export class Sim {
       if (AL.player) { this.log(`${D.name} просит помощи: союзнический долг зовёт ${AL.name} в войну`, 'war', ally); continue; }
       war.defenders.push(ally);
       this.setRel(ally, att, -90);
+      this.addGrudge(ally, att, 1095);
     }
     for (const g of Object.values(this.s.countries)) {
-      if (g.guarantees.includes(def) && !war.defenders.includes(g.id) && g.id !== att && !g.player) { war.defenders.push(g.id); this.setRel(g.id, att, -80); }
+      if (g.guarantees.includes(def) && !war.defenders.includes(g.id) && g.id !== att && !g.player) { war.defenders.push(g.id); this.setRel(g.id, att, -80); this.addGrudge(g.id, att, 1095); }
     }
     this.log(`⚔ ${A.name} объявляет войну: ${D.name}${war.defenders.length > 1 ? ` (+${war.defenders.length - 1} союзн.)` : ''}`, 'war');
     this.fx.push({ k: 'war', war });
@@ -124,7 +144,7 @@ export class Sim {
   joinWar(c: string, war: War, side: 'a' | 'd') {
     if (this.sideOf(war, c)) return;
     (side === 'a' ? war.attackers : war.defenders).push(c);
-    for (const e of side === 'a' ? war.defenders : war.attackers) this.setRel(c, e, -90);
+    for (const e of side === 'a' ? war.defenders : war.attackers) { this.setRel(c, e, -90); this.addGrudge(c, e, 1095); this.addGrudge(e, c, 730); }
     this.log(`${this.c(c)!.name} вступает в войну «${war.name}»`, 'war');
   }
 
@@ -450,6 +470,11 @@ export class Sim {
       const p = this.world.provinceAt(u.lat, u.lon);
       if (p < 0) continue;
       const ctrl = P.ctrl[p];
+      if (ctrl !== u.owner && ctrl !== '010' && !this.atWar(ctrl, u.owner) && !this.friendly(ctrl, u.owner)) {
+        this.log(`⚡ Войска ${this.c(u.owner)!.name} вторглись на территорию ${this.c(ctrl)!.name}!`, 'war');
+        this.declareWar(u.owner, ctrl, 'none');
+        this.addGrudge(ctrl, u.owner, 1095);
+      }
       if (ctrl === u.owner || !this.atWar(ctrl, u.owner)) {
         // Liberation of allied land
         if (P.owner[p] !== ctrl && this.friendly(P.owner[p], u.owner) && this.atWar(ctrl, u.owner) === false && this.atWar(P.owner[p], ctrl)) P.ctrl[p] = P.owner[p];
@@ -517,9 +542,20 @@ export class Sim {
       id: this.s.nextId++, type, owner, from, to, nuclear: type === 'icbm', dur: 2.5 + dist / (st.speed * 600), elapsed: 0,
       interceptAt: null, interceptBy: null, targetUnit,
     };
-    // Interception roll by hostile air defences covering the target.
+    // Whose soil/unit is being hit? A strike on a non-hostile country is an act of war.
     const tp = this.world.provinceAt(to.lat, to.lon);
     const defender = tp >= 0 ? this.s.prov.ctrl[tp] : null;
+    let victim = defender;
+    if (m.targetUnit != null) { const tu = this.unit(m.targetUnit); if (tu) victim = tu.owner; }
+    if (victim === '010') victim = null;
+    if (victim && victim !== owner) {
+      if (!this.atWar(owner, victim)) {
+        this.log(`⚡ ${c.name} наносит удар без объявления войны: ${this.c(victim)?.name}`, 'war');
+        this.declareWar(owner, victim, 'none');
+      }
+      this.addGrudge(victim, owner, 1095);
+    }
+    // Interception roll by hostile air defences covering the target.
     const ads = this.s.units.filter((u) => u.type === 'airdef' && u.ammo >= 1 && u.owner !== owner && (this.atWar(u.owner, owner) || (defender && this.friendly(u.owner, defender) && this.atWar(defender, owner))));
     const recent = this.s.missiles.filter((x) => x.owner === owner).length;
     const overload = Math.max(0.3, 1 - recent * 0.04 * (1 + this.mod(c, 'ad_overload')));
@@ -534,13 +570,9 @@ export class Sim {
     }
     this.s.missiles.push(m);
     this.fx.push({ k: 'launch', m });
-    if (defender) {
-      const D = this.c(defender);
-      if (D && defender !== owner) this.addRel(owner, defender, -5);
-      if (m.nuclear) {
-        this.log(`☢ ЯДЕРНЫЙ ПУСК! ${c.name} → ${D?.name ?? 'цель'}`, 'alert');
-        this.s.tension = 100;
-      }
+    if (m.nuclear) {
+      this.log(`☢ ЯДЕРНЫЙ ПУСК! ${c.name} → ${victim ? (this.c(victim)?.name ?? 'цель') : 'цель'}`, 'alert');
+      this.s.tension = 100;
     }
     return m;
   }
@@ -597,7 +629,8 @@ export class Sim {
         D.pop -= deaths;
         D.stability = Math.max(0, D.stability - 25);
         A.opinion = -100;
-        for (const o of Object.values(this.s.countries)) if (o.id !== m.owner) this.addRel(o.id, m.owner, -60);
+        for (const o of Object.values(this.s.countries)) if (o.id !== m.owner) { this.addRel(o.id, m.owner, -60); this.addGrudge(o.id, m.owner, 730); }
+        this.addGrudge(D.id, m.owner, 3650);
         this.log(`☢ Ядерный удар по ${pr.name}: погибло ~${(deaths * 1000).toFixed(0)} тыс. человек`, 'alert', owner);
         for (const n of pr.neighbors) P.damage[n] = Math.min(1, P.damage[n] + 0.4);
       } else D.stability = Math.max(0, D.stability - 0.05);
