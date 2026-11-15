@@ -117,5 +117,45 @@ hour(24 * 20);
 const e5 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' });
 T('cooldown expired', e5 === null, `e5=${e5} rel=${R('643', '840')}`);
 
+// 6. Two-sided diplomacy: alliance and ultimatum on a player become request cards, never instant.
+const e10 = dispatch(sim, '804', { t: 'diplo', action: 'alliance', target: '840' });
+T('alliance to player = request', e10 === null && s.countries['840'].flags.includes('allyoffer_804') && !sim.militaryAllies('804').includes('840'), `e10=${e10}`);
+const e11 = dispatch(sim, '840', { t: 'diplo', action: 'acceptAlliance', target: '804' });
+T('accept alliance joins', e11 === null && sim.militaryAllies('804').includes('840') && !s.countries['840'].flags.includes('allyoffer_804'), `e11=${e11}`);
+
+const e12 = dispatch(sim, '804', { t: 'diplo', action: 'ultimatum', target: '643' });
+T('ultimatum to player = card', e12 === null && s.countries['643'].flags.includes('ultimatum_804'), `e12=${e12}`);
+const e13 = dispatch(sim, '643', { t: 'diplo', action: 'acceptUltimatum', target: '804' });
+T('accept ultimatum cedes province', e13 === null && s.prov.owner[1] === '804', `owner→${s.prov.owner[1]}`);
+dispatch(sim, '804', { t: 'diplo', action: 'ultimatum', target: '643' });
+const e14 = dispatch(sim, '643', { t: 'diplo', action: 'declineUltimatum', target: '804' });
+T('decline ultimatum clears', e14 === null && !s.countries['643'].flags.includes('ultimatum_804'), `e14=${e14}`);
+
+// 7. World event pending is resolved through the host path, not only locally.
+s.pending.push({ key: s.nextId++, event: 'oil_shock', country: '643', deadline: s.tick + 24 });
+const wkey = s.pending[s.pending.length - 1].key;
+dispatch(sim, '643', { t: 'event', key: wkey, option: 0 });
+T('world event resolved host-side', !s.pending.some((p) => p.key === wkey));
+
+// 8. Losing player gets a capitulation decision instead of instant annexation.
+s.countries['804'].player = 'x';
+sim.declareWar('643', '804', 'claims');
+const dayNow = () => (sim as any).day();
+s.prov.ctrl[1] = '643'; s.prov.ctrl[2] = '643'; // UA fully occupied
+dayNow();
+const capPend = s.pending.find((p) => p.event === 'capitulation' && p.country === '804');
+T('player capitulation asks first', !!capPend && s.countries['804'].alive);
+if (capPend) {
+  dispatch(sim, '804', { t: 'event', key: capPend.key, option: 1 });
+  T('fight-on sets cooldown', (s.countries['804'].modifiers.cap_cd ?? 0) > s.tick);
+  dayNow();
+  T('no re-ask during cooldown', !s.pending.some((p) => p.event === 'capitulation' && p.country === '804'));
+  s.countries['804'].modifiers.cap_cd = 0;
+  dayNow();
+  const capPend2 = s.pending.find((p) => p.event === 'capitulation' && p.country === '804');
+  if (capPend2) dispatch(sim, '804', { t: 'event', key: capPend2.key, option: 0 });
+  T('accept capitulation resolves', s.log.some((l) => l.text.includes('капитулирует')) && !s.pending.some((p) => p.event === 'capitulation' && p.country === '804'));
+}
+
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);

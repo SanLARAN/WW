@@ -286,7 +286,14 @@ export class Sim {
         if (P.ctrl[i] === c.id) { held++; popHeld += ps; }
       }
       const capLost = P.ctrl[c.capital] !== c.id;
-      if (own && (popHeld / Math.max(1e-6, pop) < (capLost ? 0.55 : 0.3))) this.capitulate(c);
+      if (own && (popHeld / Math.max(1e-6, pop) < (capLost ? 0.55 : 0.3))) {
+        if (c.player) {
+          if ((c.modifiers.cap_cd ?? 0) <= this.s.tick && !this.s.pending.some((p) => p.event === 'capitulation' && p.country === c.id)) {
+            this.s.pending.push({ key: this.s.nextId++, event: 'capitulation', country: c.id, deadline: this.s.tick + 24 * 20 });
+            this.log(`🏳 ${c.name} на грани капитуляции — генеральный штаб ждёт решения`, 'war', c.id);
+          }
+        } else this.capitulate(c);
+      }
     }
     this.s.tension = Math.max(0, this.s.tension - 0.05);
     this.invalidateAllies();

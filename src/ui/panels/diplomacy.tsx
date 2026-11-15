@@ -20,6 +20,8 @@ export function DiplomacyPanel() {
   all.sort((a, b) => (sim.atWar(me.id, b.id) ? 1 : 0) - (sim.atWar(me.id, a.id) ? 1 : 0) || b.gdp - a.gdp);
   const offers = me.flags.filter((f) => f.startsWith('peaceoffer_'));
   const calls = me.flags.filter((f) => f.startsWith('calltoarms_'));
+  const allyOffers = me.flags.filter((f) => f.startsWith('allyoffer_'));
+  const ultimatums = me.flags.filter((f) => f.startsWith('ultimatum_'));
   return (
     <div class="row" style={{ alignItems: 'stretch', gap: 12, height: '100%' }}>
       <div class="col" style={{ width: 200, minHeight: 0 }}>
@@ -39,6 +41,26 @@ export function DiplomacyPanel() {
         </div>
       </div>
       <div class="grow col" style={{ minWidth: 0, overflow: 'auto' }}>
+        {allyOffers.map((f) => {
+          const fc = sim.c(f.slice(10));
+          return fc ? (
+            <div class="card" key={f} style={{ borderColor: 'var(--accent)' }}>
+              <b class="small">🤝 {fc.name} предлагает вам военный союз</b>
+              <div class="row"><button class="btn sm primary" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'acceptAlliance', target: fc.id }))}>Принять</button>
+                <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'declineAlliance', target: fc.id }))}>Отклонить</button></div>
+            </div>
+          ) : null;
+        })}
+        {ultimatums.map((f) => {
+          const fc = sim.c(f.slice(10));
+          return fc ? (
+            <div class="card" key={f} style={{ borderColor: 'var(--warn)' }}>
+              <b class="small">📜 {fc.name} выдвигает ультиматум — требует уступить пограничную провинцию</b>
+              <div class="row"><button class="btn sm danger" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'acceptUltimatum', target: fc.id }))}>Уступить провинцию</button>
+                <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'declineUltimatum', target: fc.id }))}>Отвергнуть</button></div>
+            </div>
+          ) : null;
+        })}
         {calls.map((f) => {
           const fc = sim.c(f.slice(11));
           return fc ? (

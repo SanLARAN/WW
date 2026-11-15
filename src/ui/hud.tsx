@@ -223,7 +223,7 @@ function EventModal() {
           <p class="event-text">{e.text}</p>
           <div class="col" style={{ gap: 6 }}>
             {e.options.map((o, i) => (
-              <button class="opt" key={i} autoFocus={i === 0} onClick={() => { audio.ui('confirm'); if (e.world) { s.pending = s.pending.filter((x) => x.key !== p.key); c.bump(); } else c.dispatch({ t: 'event', key: p.key, option: i }); }}>
+              <button class="opt" key={i} autoFocus={i === 0} onClick={() => { audio.ui('confirm'); if (e.world) { s.pending = s.pending.filter((x) => x.key !== p.key); c.bump(); } c.dispatch({ t: 'event', key: p.key, option: i }); }}>
                 <b>{o.label}</b>{o.tip && <span>{o.tip}</span>}
               </button>
             ))}

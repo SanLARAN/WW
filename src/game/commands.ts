@@ -25,7 +25,7 @@ export type Command =
   | { t: 'event'; key: number; option: number }
   | { t: 'speed'; speed: number };
 
-export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'callToArms' | 'acceptCall' | 'declineCall' | 'joinWar' | 'acceptPeace' | 'declinePeace';
+export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'callToArms' | 'acceptCall' | 'declineCall' | 'joinWar' | 'acceptPeace' | 'declinePeace' | 'acceptAlliance' | 'declineAlliance' | 'acceptUltimatum' | 'declineUltimatum';
 
 export const DIPLO_INFO: Record<DiploAction, { name: string; cost: number; desc: string; hostile?: boolean }> = {
   improve: { name: 'Улучшить отношения', cost: 1, desc: '+8 к отношениям (макс. +30). Раз в 45 дней. Не работает в войне и пока цель помнит удары.' },
@@ -52,6 +52,10 @@ export const DIPLO_INFO: Record<DiploAction, { name: string; cost: number; desc:
   joinWar: { name: 'Вступить в войну на их стороне', cost: 0, desc: 'Присоединиться к их войне.' },
   acceptPeace: { name: 'Принять мир', cost: 0, desc: 'Принять предложенные условия мира.' },
   declinePeace: { name: 'Отклонить мир', cost: 0, desc: 'Продолжить войну.' },
+  acceptAlliance: { name: 'Принять союз', cost: 0, desc: 'Вступить в военный союз.' },
+  declineAlliance: { name: 'Отклонить союз', cost: 0, desc: 'Отказаться от военного союза.' },
+  acceptUltimatum: { name: 'Уступить', cost: 0, desc: 'Принять ультиматум и отдать провинцию.' },
+  declineUltimatum: { name: 'Отвергнуть', cost: 0, desc: 'Отвергнуть ультиматум.' },
 };
 
 export const CASUS_BELLI: Record<string, string> = {
@@ -208,6 +212,11 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
     case 'alliance': {
       const ideo = c.ideology.reduce((s, v, k) => s + Math.abs(v - T.ideology[k]), 0) / 4;
       if (!T.player && (rel < 60 || ideo > 70)) return `${T.name} отказывается (отношения ${Math.round(rel)}, идеологическая дистанция ${Math.round(ideo)})`;
+      if (T.player) {
+        if (!T.flags.includes(`allyoffer_${c.id}`)) T.flags.push(`allyoffer_${c.id}`);
+        sim.log(`🤝 ${c.name} предлагает вам военный союз — откройте «Дипломатию», чтобы ответить`, 'diplo', target);
+        return null;
+      }
       const mil = c.alliances.find((a) => a.startsWith('X') || ['NATO', 'CSTO', 'AUKUS'].includes(a));
       const id = mil ?? `X${c.id}`;
       if (!c.alliances.includes(id)) c.alliances.push(id);
@@ -243,7 +252,12 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
       if (!border.length) return 'Нет общей границы';
       const ratio = power(c) / Math.max(1, power(T));
       const allies = sim.militaryAllies(target).filter((a) => !sim.militaryAllies(c.id).includes(a));
-      if (!T.player && ratio > 3 && !allies.length) {
+      if (T.player) {
+        if (!T.flags.includes(`ultimatum_${c.id}`)) T.flags.push(`ultimatum_${c.id}`);
+        sim.log(`📜 ${c.name} выдвигает вам ультиматум: уступите пограничную провинцию или будет война — откройте «Дипломатию», чтобы ответить`, 'diplo', target);
+        return null;
+      }
+      if (ratio > 3 && !allies.length) {
         const p = border[0];
         P.owner[p] = c.id; P.ctrl[p] = c.id;
         sim.log(`📜 ${T.name} принимает ультиматум и уступает ${sim.world.provinces[p].name}`, 'diplo');
@@ -372,6 +386,47 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
       return null;
     }
     case 'declinePeace': c.flags = c.flags.filter((f) => !f.startsWith('peaceoffer_' + target + '_')); return null;
+    case 'acceptAlliance': {
+      const flag = `allyoffer_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет предложения';
+      c.flags = c.flags.filter((f) => f !== flag);
+      const mil = T.alliances.find((a) => a.startsWith('X') || ['NATO', 'CSTO', 'AUKUS'].includes(a)) ?? `X${target}`;
+      if (!T.alliances.includes(mil)) T.alliances.push(mil);
+      if (!c.alliances.includes(mil)) c.alliances.push(mil);
+      sim.invalidateAllies();
+      sim.addRel(c.id, target, 15);
+      sim.log(`🤝 ${c.name} вступает в военный союз с ${T.name}`, 'diplo');
+      return null;
+    }
+    case 'declineAlliance': {
+      const flag = `allyoffer_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет предложения';
+      c.flags = c.flags.filter((f) => f !== flag);
+      sim.addRel(target, c.id, -5);
+      if (T.player) sim.log(`${c.name} отклоняет ваше предложение военного союза`, 'diplo', target);
+      return null;
+    }
+    case 'acceptUltimatum': {
+      const flag = `ultimatum_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет ультиматума';
+      c.flags = c.flags.filter((f) => f !== flag);
+      const P = sim.s.prov;
+      const border = (sim.world.byCountry.get(c.id) ?? []).filter((p) => P.owner[p] === c.id && sim.world.provinces[p].neighbors.some((n) => P.ctrl[n] === target));
+      const p = border[0];
+      if (p === undefined) return 'Нет общей границы';
+      P.owner[p] = target; P.ctrl[p] = target;
+      sim.log(`📜 ${c.name} принимает ультиматум ${T.name} и уступает ${sim.world.provinces[p].name}`, 'diplo');
+      T.opinion -= 10; sim.addRel(target, c.id, -40);
+      return null;
+    }
+    case 'declineUltimatum': {
+      const flag = `ultimatum_${target}`;
+      if (!c.flags.includes(flag)) return 'Нет ультиматума';
+      c.flags = c.flags.filter((f) => f !== flag);
+      sim.addRel(target, c.id, -30); sim.s.tension += 5;
+      if (T.player) sim.log(`${c.name} отвергает ваш ультиматум`, 'diplo', target);
+      return null;
+    }
     case 'joinWar': {
       const war = sim.s.wars.find((w) => sim.sideOf(w, target));
       if (!war) return 'Цель не воюет';

@@ -23,6 +23,8 @@ export interface GameEvent {
   once?: boolean;
   /** world event: applies once globally, shown to every player */
   world?: boolean;
+  /** not rolled by dailyEvents — pushed into pending manually by game logic */
+  manual?: boolean;
   options: EventOption[];
 }
 
@@ -346,6 +348,15 @@ export const EVENTS: GameEvent[] = [
   {
     id: 'scandal', world: true, mtth: 700, icon: '🗞', title: 'Международный скандал', text: 'Дипломатическая переписка утекла в прессу. Две страны отзывают послов.',
     options: [{ label: 'Понятно', effect: (s) => { const ids = Object.keys(s.s.countries).filter((id) => s.s.countries[id].gdp > 200); const a = ids[Math.floor(s.rng() * ids.length)], b = ids[Math.floor(s.rng() * ids.length)]; if (a && b && a !== b) { s.addRel(a, b, -20); s.log(`🗞 Скандал: ${s.c(a)!.name} и ${s.c(b)!.name} отзывают послов`, 'diplo'); } } }],
+  },
+  // ---------------------------------------------------------------- manual
+  {
+    id: 'capitulation', manual: true, icon: '🏳', title: 'Капитуляция',
+    text: 'Армия разгромлена, большая часть страны оккупирована. Генеральный штаб просит принять условия капитуляции: оккупированные территории уйдут победителям, но война закончится. Можно отказаться и сражаться до конца.',
+    options: [
+      { label: 'Капитулировать', tip: 'Оккупированные провинции аннексируются, война заканчивается', effect: (s, c) => s.capitulate(c) },
+      { label: 'Сражаться до конца', tip: '-10 стабильности, следующее предложение через ~45 дней', effect: (s, c) => { c.stability -= 10; c.modifiers.cap_cd = s.s.tick + 24 * 45; s.log(`⚔ ${c.name} отказывается капитулировать и сражается до конца`, 'war', c.id); } },
+    ],
   },
 ];
 

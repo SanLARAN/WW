@@ -22,7 +22,10 @@ export function applyOption(sim: Sim, c: CountryState, e: GameEvent, i: number) 
 
 function fire(sim: Sim, c: CountryState, e: GameEvent) {
   if (c.player) {
-    sim.s.pending.push({ key: sim.s.nextId++, event: e.id, country: c.id, deadline: sim.s.tick + 24 * 30 });
+    const s = sim.s;
+    if (s.pending.some((p) => p.event === e.id && p.country === c.id)) return;
+    if (s.pending.filter((p) => p.country === c.id).length >= 5) return;
+    s.pending.push({ key: s.nextId++, event: e.id, country: c.id, deadline: s.tick + 24 * 30 });
   } else applyOption(sim, c, e, pickAi(sim, c, e));
 }
 
@@ -31,11 +34,12 @@ export function dailyEvents(sim: Sim) {
   const today = isoDay(sim.date);
   const campaign = s.settings.mode === 'campaign';
   for (const e of EVENTS) {
+    if (e.manual) continue;
     if (e.world) {
       if (sim.rng() < 1 / (e.mtth ?? 1000)) {
         e.options[0].effect(sim, Object.values(s.countries)[0]);
         sim.log(`${e.icon} ${e.title}: ${e.text}`, 'event');
-        for (const c of Object.values(s.countries)) if (c.player) s.pending.push({ key: s.nextId++, event: e.id, country: c.id, deadline: s.tick + 24 * 10 });
+        for (const c of Object.values(s.countries)) if (c.player && !s.pending.some((p) => p.event === e.id && p.country === c.id)) s.pending.push({ key: s.nextId++, event: e.id, country: c.id, deadline: s.tick + 24 * 10 });
       }
       continue;
     }
