@@ -147,15 +147,16 @@ export async function pjsClient(bus: PjsClientBus, code: string, name: string, o
   const Peer = await peerjs();
   const peer = new Peer(peerOpts());
   let settled = false;
+  const timer = setTimeout(() => { if (!settled) { settled = true; peer.destroy(); onFail(new Error('timeout')); } }, 15000);
   peer.on('open', () => {
     console.info('[pjs] connecting to', PJS_PREFIX + code);
     let conn: DataConnection;
     try {
       conn = peer.connect(PJS_PREFIX + code, { serialization: 'raw', reliable: true, metadata: { name } });
-    } catch (e) { console.warn('[pjs] connect threw', e); onFail(e); return; }
+    } catch (e) { console.warn('[pjs] connect threw', e); clearTimeout(timer); onFail(e); return; }
     bus.attach(peer, conn);
-    conn.on('open', () => { settled = true; });
-    conn.on('error', (e) => { console.warn('[pjs] conn err', e); if (!settled) onFail(e); });
+    conn.on('open', () => { settled = true; clearTimeout(timer); });
+    conn.on('error', (e) => { console.warn('[pjs] conn err', e); if (!settled) { clearTimeout(timer); settled = true; onFail(e); } });
   });
   peer.on('error', (e: { type?: string }) => {
     if (e?.type === 'peer-unavailable' || !settled) onFail(e);

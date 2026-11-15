@@ -83,6 +83,7 @@ export class HostSession implements Session {
   private lastSeen = new Map<string, number>();
   onLobby?: () => void;
   onStart?: (sim: Sim) => void;
+  onError?: (t: string) => void;
 
   constructor(private world: World, private pid: string, name: string, roomName: string, settings: GameSettings, online = false) {
     this.lobby = { code: this.code, name: roomName, host: pid, players: [{ pid, name, country: null, host: true, online: true }], settings, started: false, max: 16 };
@@ -91,6 +92,7 @@ export class HostSession implements Session {
       const bus = new PjsHostBus();
       this.bus = bus;
       void pjsHost(bus, this.code, (c) => { this.code = c; this.lobby.code = c; }, () => {
+        this.onError?.('PeerJS-облако недоступно — комната работает только между вкладками этого браузера');
         if (this.bus === bus) { bus.close(); this.bus = openBus('ww-room-' + this.code); this.bus.onMessage((m) => this.onBus(m)); }
       });
     } else this.bus = openBus('ww-room-' + this.code);
@@ -320,7 +322,7 @@ export class ClientSession implements Session {
       const bus = new PjsClientBus();
       this.bus = bus;
       bus.onLink = (l) => { this.link = l; l.onMessage = (msg) => this.onPeer(msg); l.onClose = () => { this.link = null; }; };
-      void pjsClient(bus, code, name, () => this.onError?.('Комната недоступна или не существует'));
+      void pjsClient(bus, code, name, (e) => this.onError?.((e as { type?: string })?.type === 'peer-unavailable' ? 'Комната не найдена — проверьте код' : 'Нет связи с сервером подключений — проверьте интернет или VPN'));
     } else this.bus = openBus('ww-room-' + code);
     this.bus.onMessage((m) => this.onBus(m));
     this.bus.send({ type: 'hello', from: pid, data: { name } });

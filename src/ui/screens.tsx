@@ -212,6 +212,7 @@ export function Lobby() {
     const h = new HostSession(ctl.world, ctl.playerId, ctl.playerName, roomName, { mode: 'campaign', difficulty: 'normal', historical: true }, true);
     h.onLobby = () => force((x) => x + 1);
     h.onStart = (sim) => begin(sim, h);
+    h.onError = (t) => ctl.toast(t, 'error');
     setRoom(h);
     audio.ui('confirm');
   };
