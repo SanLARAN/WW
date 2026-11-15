@@ -163,9 +163,25 @@ function placeArmy(world: World, sim: Sim, c: CountryState, d: CountryDef, rng: 
       } else if (type === 'airdef' || type === 'air') {
         const base = world.provinces[i === 0 ? c.capital : cities[i % cities.length]];
         pos = jitter(base.lat, base.lon, 40);
+        if (type === 'airdef') {
+          let pi = world.provinceAt(pos.lat, pos.lon);
+          for (let t = 0; t < 4 && (pi < 0 || P.ctrl[pi] !== c.id); t++) { pos = jitter(base.lat, base.lon, 40); pi = world.provinceAt(pos.lat, pos.lon); }
+          if (pi < 0 || P.ctrl[pi] !== c.id) pos = { lat: base.lat, lon: base.lon };
+        }
       } else {
         const base = world.provinces[i % 3 === 2 ? cities[i % cities.length] : front[i % front.length]];
         pos = jitter(base.lat, base.lon);
+        // Ground forces must spawn on their own soil — a jittered position across
+        // the border would otherwise be an instant act of war on tick one.
+        let pi = world.provinceAt(pos.lat, pos.lon);
+        for (let t = 0; t < 4 && (pi < 0 || P.ctrl[pi] !== c.id); t++) { pos = jitter(base.lat, base.lon); pi = world.provinceAt(pos.lat, pos.lon); }
+        if (pi < 0 || P.ctrl[pi] !== c.id) {
+          // Province centroids can rasterise onto a neighbour — scan own provinces for a verified anchor.
+          for (const cand of [c.capital, ...provs]) {
+            const pr = world.provinces[cand];
+            if (world.provinceAt(pr.lat, pr.lon) === cand) { pos = { lat: pr.lat, lon: pr.lon }; break; }
+          }
+        }
       }
       if (type !== 'navy' && type !== 'air' && !world.isLand(pos.lat, pos.lon)) { const b = world.provinces[c.capital]; pos = { lat: b.lat, lon: b.lon }; }
       const u = sim.spawnUnit(c.id, type, pos.lat, pos.lon);

@@ -44,7 +44,11 @@ s.countries['643'].missiles.cruise = 5;
 s.countries['643'].player = true;
 console.log(`start rel: RU-US=${R('643', '840')} RU-UA=${R('643', '804')}`);
 
-// 1. Improve fires once, then 45-day cooldown.
+// 1. All spawned ground units stand on their own soil — no accidental wars on tick one.
+const stray = s.units.filter((u) => u.type !== 'navy' && u.type !== 'air').filter((u) => { const p = world.provinceAt(u.lat, u.lon); return p < 0 || s.prov.ctrl[p] !== u.owner; });
+T('ground units on own soil', stray.length === 0, `stray=${stray.length}`);
+
+// 2. Improve fires once, then 45-day cooldown.
 const e1 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' });
 const e2 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' });
 T('improve once + cooldown', e1 === null && typeof e2 === 'string', `e1=${e1} e2=${e2}`);
