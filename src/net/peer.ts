@@ -3,7 +3,7 @@ import type { Bus, BusMsg } from './bus';
 const ICE: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const CHUNK = 60_000;
 
-/** A reliable link to one remote peer — WebRTC data channel (PeerLink) or PeerJS connection (PjsLink). */
+/** A reliable link to one remote peer — WebRTC data channel (PeerLink) or a transport connection (ConnLink). */
 export interface Link {
   readonly remote: string;
   open: boolean;
@@ -43,10 +43,74 @@ export class FrameReader {
   }
 }
 
+/** Frame envelope shared by connection-oriented transports (PeerJS, Trystero). */
+export const encFrame = (ch: 'b' | 'l', m: unknown) => JSON.stringify({ ch, m });
+export const decFrame = (d: unknown): { ch: string; m: unknown } | null => {
+  try { const f = JSON.parse(String(d)); return f && (f.ch === 'b' || f.ch === 'l') ? f : null; } catch { return null; }
+};
+
+/** Minimal message-channel contract a transport must provide to carry a Link. */
+export interface ConnLike {
+  readonly peer: string;
+  readonly open: boolean;
+  send(d: unknown): void;
+  close(): void;
+  on(evt: 'open' | 'close' | 'error', cb: (...args: unknown[]) => void): void;
+}
+
+export const connLinks = new WeakMap<ConnLike, ConnLink>();
+
+/** Reliable Link over an existing ordered message channel supplied by the transport. */
+export class ConnLink implements Link {
+  open = false;
+  readonly relay = false;
+  onMessage?: (msg: Record<string, unknown>) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+  private fr = new FrameReader();
+  constructor(readonly conn: ConnLike, readonly remote: string) {
+    connLinks.set(conn, this);
+    if (conn.open) queueMicrotask(() => { this.ready(); this.flush(); });
+    else conn.on('open', () => { this.ready(); this.flush(); });
+    conn.on('close', () => { this.open = false; this.onClose?.(); });
+    conn.on('error', (e: unknown) => console.warn('[net] link error', e));
+  }
+  private buf: Record<string, unknown>[] = [];
+  private ready() {
+    if (this.open) return;
+    this.open = true;
+    for (const m of this.buf.splice(0)) this.send(m);
+    this.onOpen?.();
+  }
+  private flush() {
+    const pend = (this.conn as ConnLike & { pendingL?: unknown[] }).pendingL;
+    if (pend?.length) for (const m of pend.splice(0)) this.feed(m);
+  }
+  feed(m: unknown) {
+    const full = this.fr.push(String(m));
+    if (full == null) return;
+    try { this.onMessage?.(JSON.parse(full)); } catch (e) { console.warn('[net] frame', e); }
+  }
+  send(msg: Record<string, unknown>) {
+    if (!this.open) { if (this.buf.length < 200) this.buf.push(msg); return; }
+    const raw = JSON.stringify(msg);
+    for (const f of encodeFrames(raw)) this.conn.send(encFrame('l', f));
+  }
+  handleBus() { /* channel already established — no signalling needed */ }
+  get buffered() { return 0; }
+  close() { try { this.conn.close(); } catch { /* noop */ } this.open = false; }
+}
+
 export async function gzipJson(obj: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(obj));
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
-  const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+  let buf: Uint8Array;
+  if (typeof CompressionStream === 'undefined') {
+    const { gzipSync } = await import('fflate');
+    buf = gzipSync(bytes);
+  } else {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+    buf = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
   let s = '';
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
   return btoa(s);
@@ -56,6 +120,10 @@ export async function gunzipJson<T>(b64: string): Promise<T> {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  if (typeof DecompressionStream === 'undefined') {
+    const { gunzipSync, strFromU8 } = await import('fflate');
+    return JSON.parse(strFromU8(gunzipSync(bytes))) as T;
+  }
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   return JSON.parse(await new Response(stream).text()) as T;
 }

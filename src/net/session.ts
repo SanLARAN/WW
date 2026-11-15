@@ -4,9 +4,8 @@ import type { Command } from '../game/commands';
 import type { CountryState, GameSettings, GameState, LogEntry, Unit } from '../game/types';
 import type { World } from '../world/world';
 import { openBus, supabaseConfig, type Bus, type BusMsg } from './bus';
-import { PeerLink, gunzipJson, gzipJson, type Link } from './peer';
-import { PjsClientBus, PjsHostBus, PjsLink, pjsClient, pjsHost } from './pjs';
-import type { DataConnection } from 'peerjs';
+import { ConnLink, PeerLink, gunzipJson, gzipJson, type ConnLike, type Link } from './peer';
+import { TrysteroBus, trysClient, trysHost } from './trys';
 import { createGame } from '../game/setup';
 
 export interface ChatMsg { from: string; name: string; text: string; to: 'all' | 'allies' | string; t: number }
@@ -88,12 +87,14 @@ export class HostSession implements Session {
   constructor(private world: World, private pid: string, name: string, roomName: string, settings: GameSettings, online = false) {
     this.lobby = { code: this.code, name: roomName, host: pid, players: [{ pid, name, country: null, host: true, online: true }], settings, started: false, max: 16 };
     if (online && !supabaseConfig()) {
-      // Internet rooms without a configured server: PeerJS public signalling cloud.
-      const bus = new PjsHostBus();
+      // Internet rooms without a configured server: Trystero — signalling over
+      // many public relays at once, then direct WebRTC between browsers.
+      const bus = new TrysteroBus();
       this.bus = bus;
-      void pjsHost(bus, this.code, (c) => { this.code = c; this.lobby.code = c; }, () => {
-        this.onError?.('PeerJS-облако недоступно — комната работает только между вкладками этого браузера');
-        if (this.bus === bus) { bus.close(); this.bus = openBus('ww-room-' + this.code); this.bus.onMessage((m) => this.onBus(m)); }
+      bus.peerJoined = () => this.pushLobby();
+      void trysHost(bus, this.code).catch((e) => {
+        console.warn('[net] host room failed', e);
+        this.onError?.('Не удалось открыть онлайн-комнату — проверьте интернет или VPN');
       });
     } else this.bus = openBus('ww-room-' + this.code);
     this.lobbyBus = openBus('ww-lobby');
@@ -120,10 +121,11 @@ export class HostSession implements Session {
       this.lastSeen.set(m.from, Date.now());
       {
         const existing = this.links.get(m.from);
-        const same = m._conn && existing instanceof PjsLink && existing.conn === m._conn;
+        const same = m._conn && existing instanceof ConnLink && existing.conn === m._conn;
         if (!same) {
           existing?.close();
-          const link: Link = m._conn ? new PjsLink(m._conn as DataConnection, m.from) : new PeerLink(this.bus, this.pid, m.from, true);
+          const link: Link = m._conn ? new ConnLink(m._conn as ConnLike, m.from) : new PeerLink(this.bus, this.pid, m.from, true);
+          link.onClose = () => { if (this.links.get(m.from) === link) this.links.delete(m.from); };
           link.onMessage = (msg) => this.onPeer(m.from, msg);
           link.onOpen = () => { if (this.sim) void this.sendSnapshot(link, true); };
           this.links.set(m.from, link);
@@ -309,6 +311,7 @@ export class ClientSession implements Session {
   private bus: Bus;
   private link: Link | null = null;
   private pingT = 0;
+  private helloT = 0;
   private applying = Promise.resolve();
   onLobby?: () => void;
   onStart?: (sim: Sim) => void;
@@ -319,10 +322,10 @@ export class ClientSession implements Session {
 
   constructor(private world: World, private pid: string, private name: string, readonly code: string, online = false) {
     if (online && !supabaseConfig()) {
-      const bus = new PjsClientBus();
+      const bus = new TrysteroBus();
       this.bus = bus;
       bus.onLink = (l) => { this.link = l; l.onMessage = (msg) => this.onPeer(msg); l.onClose = () => { this.link = null; }; };
-      void pjsClient(bus, code, name, (e) => this.onError?.((e as { type?: string })?.type === 'peer-unavailable' ? 'Комната не найдена — проверьте код' : 'Нет связи с сервером подключений — проверьте интернет или VPN'));
+      void trysClient(bus, code).catch(() => this.onError?.('Комната не найдена или сигнальные релеи недоступны — проверьте код, интернет или VPN'));
     } else this.bus = openBus('ww-room-' + code);
     this.bus.onMessage((m) => this.onBus(m));
     this.bus.send({ type: 'hello', from: pid, data: { name } });
@@ -412,7 +415,10 @@ export class ClientSession implements Session {
     const sim = this.sim;
     if (sim && sim.s.speed > 0) for (const m of sim.s.missiles) m.elapsed += dt;
     this.pingT -= dt;
-    if (this.pingT <= 0) { this.pingT = 5; this.link?.send({ k: 'ping' }); if (!this.link && !this.sim) this.bus.send({ type: 'hello', from: this.pid, data: { name: this.name } }); }
+    if (this.pingT <= 0) { this.pingT = 5; this.link?.send({ k: 'ping' }); }
+    this.helloT -= dt;
+    const joined = !!this.lobby?.players.some((p) => p.pid === this.pid);
+    if (this.helloT <= 0 && (!this.link || !joined)) { this.helloT = 2; this.bus.send({ type: 'hello', from: this.pid, data: { name: this.name } }); }
   }
 
   status() { return `Клиент · комната ${this.code}${this.link?.relay ? ' · ретрансляция' : this.link?.open ? ' · P2P' : ' · подключение…'}`; }

@@ -238,7 +238,7 @@ export function Lobby() {
           <div class="panel-head"><h2 class="panel-title">Мультиплеер</h2><button class="btn sm ghost" onClick={click(() => { ctl.screen = 'menu'; ctl.bump(); })}>← Назад</button></div>
           <div class="panel-body col">
             <label class="col small"><span class="caps">Позывной</span><input type="text" value={name} maxLength={20} onInput={(e) => setName((e.target as HTMLInputElement).value)} /></label>
-            <div class="small muted">{netMode() === 'online' ? `Онлайн через Supabase · ${new URL(supabaseConfig()!.url).hostname}` : 'Онлайн: прямое P2P-соединение браузеров (PeerJS). Хосту достаточно сообщить код комнаты.'}</div>
+            <div class="small muted">{netMode() === 'online' ? `Онлайн через Supabase · ${new URL(supabaseConfig()!.url).hostname}` : 'Онлайн: браузеры соединяются напрямую (P2P) — знакомство через публичные релеи. Хосту достаточно сообщить код комнаты.'}</div>
             <form class="row" onSubmit={(e) => { e.preventDefault(); const v = joinCode.trim().toUpperCase(); if (v.length >= 4) join(v); }}>
               <input type="text" class="grow mono" placeholder="Код комнаты" maxLength={8} value={joinCode} onInput={(e) => setJoinCode((e.target as HTMLInputElement).value.toUpperCase())} />
               <button class="btn sm" type="submit">Войти</button>
