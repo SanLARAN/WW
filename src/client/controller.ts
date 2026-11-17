@@ -65,6 +65,10 @@ export class Controller {
   private uiTimer = 0;
   private lastLog = 0;
   private sirenUntil = 0;
+  quality: 'auto' | 'high' | 'medium' | 'low' = 'auto';
+  private qLevel = 0; // 0 high, 1 medium, 2 low
+  private fpsE = 60;
+  private qTimer = 0;
 
   subscribe(f: () => void) { this.listeners.add(f); return () => this.listeners.delete(f); }
   bump() { for (const f of this.listeners) f(); }
@@ -77,6 +81,9 @@ export class Controller {
     const { world, images } = await loadWorld((msg, p) => { this.loading = { msg, p }; this.bump(); });
     this.world = world;
     this.engine = new Engine(canvas, world, images);
+    this.quality = (localStorage.getItem('ww.quality') || 'auto') as 'auto' | 'high' | 'medium' | 'low';
+    if (this.quality !== 'auto') this.qLevel = { high: 0, medium: 1, low: 2 }[this.quality];
+    this.engine.setQuality(this.quality === 'auto' ? 'high' : this.quality);
     this.engine.scene.add(this.fx.group, this.units.mesh, this.labels.group, this.paths.group, this.circles.group);
     this.engine.globe.setSun(new Date(Date.UTC(2020, 0, 1, 9)));
     this.setupInput(canvas);
@@ -151,6 +158,15 @@ export class Controller {
     this.bump();
   }
 
+  setQuality(q: 'auto' | 'high' | 'medium' | 'low') {
+    this.quality = q;
+    localStorage.setItem('ww.quality', q);
+    if (q !== 'auto') this.qLevel = { high: 0, medium: 1, low: 2 }[q];
+    else { this.qLevel = 0; this.fpsE = 60; }
+    this.engine.setQuality(q === 'auto' ? 'high' : q);
+    this.bump();
+  }
+
   toast(text: string, kind: Toast['kind'] = 'info') {
     this.toasts.push({ id: this.toastId++, text, kind, t: performance.now() });
     if (this.toasts.length > 6) this.toasts.shift();
@@ -159,6 +175,17 @@ export class Controller {
 
   // ------------------------------------------------------------------------------------------ frame
   private frame(dt: number, t: number) {
+    // Auto quality: sustained low fps steps the renderer down (high → medium → low).
+    this.fpsE += (1 / Math.max(dt, 1e-3) - this.fpsE) * 0.04;
+    this.qTimer += dt;
+    if (this.qTimer > 4) {
+      this.qTimer = 0;
+      if (this.quality === 'auto' && this.fpsE < 45 && this.qLevel < 2) {
+        this.qLevel++;
+        this.engine.setQuality(this.qLevel === 1 ? 'medium' : 'low');
+        this.bump();
+      }
+    }
     const sim = this.sim;
     if (!sim) {
       if (this.screen === 'menu') this.engine.controls.lon += dt * 2.5;

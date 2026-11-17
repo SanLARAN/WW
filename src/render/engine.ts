@@ -81,6 +81,16 @@ export class Engine {
     this.grade.uniforms.aberration.value = Math.max(this.grade.uniforms.aberration.value, v * 0.5);
   }
 
+  /** Graphics quality: pixel ratio + bloom. 'auto' starts high and steps down on sustained low fps. */
+  setQuality(q: 'high' | 'medium' | 'low') {
+    const dpr = window.devicePixelRatio || 1;
+    const pr = q === 'high' ? Math.min(2, dpr) : q === 'medium' ? Math.min(1.25, dpr) : 1;
+    this.renderer.setPixelRatio(pr);
+    this.bloom.enabled = q !== 'low';
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
+  }
+
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / h;

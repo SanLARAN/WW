@@ -23,6 +23,16 @@ export function SettingsBody({ inGame }: { inGame: boolean }) {
         <label class="row small"><input type="checkbox" checked={s.muted} onChange={(e) => upd({ muted: (e.target as HTMLInputElement).checked })} /> Без звука</label>
       </div>
       <div class="section col">
+        <h3 class="sub">Графика</h3>
+        <span class="small muted">«Авто» стартует с высокого качества и сам снижает его при просадках fps.</span>
+        <select value={ctl.quality} onChange={(e) => ctl.setQuality((e.target as HTMLSelectElement).value as typeof ctl.quality)} aria-label="Качество графики">
+          <option value="auto">Авто</option>
+          <option value="high">Высокое</option>
+          <option value="medium">Среднее</option>
+          <option value="low">Низкое</option>
+        </select>
+      </div>
+      <div class="section col">
         <h3 class="sub">Сеть · Supabase</h3>
         <span class="small muted">Режим: {netMode() === 'online' ? 'онлайн' : 'локальный (только вкладки этого браузера)'}. Ключи из сборки GitHub Pages подставляются автоматически; здесь можно задать свои.</span>
         <input type="text" placeholder="https://xxxx.supabase.co" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} aria-label="Supabase URL" />

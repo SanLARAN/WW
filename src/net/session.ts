@@ -1,7 +1,7 @@
 import type { Sim, Fx } from '../game/sim';
 import { createSim, dispatch } from '../game/game';
 import type { Command } from '../game/commands';
-import type { CountryState, GameSettings, GameState, LogEntry, Unit } from '../game/types';
+import type { CountryState, GameSettings, GameState, LogEntry, Missile, Unit } from '../game/types';
 import type { World } from '../world/world';
 import { openBus, supabaseConfig, type Bus, type BusMsg } from './bus';
 import { ConnLink, PeerLink, gunzipJson, gzipJson, type ConnLike, type Link } from './peer';
@@ -78,6 +78,12 @@ export class HostSession implements Session {
   private sentUnits = new Map<number, string>();
   private sentCtrl: string[] = [];
   private sentLog = 0;
+  private sentMissiles = new Set<number>();
+  private meDirty = new Set<string>();
+  private pathSigs = new Map<string, Map<number, string>>();
+  private dcount = 0;
+  private lastLoad = 0;
+  private fxT = 0;
   private fxQueue: Fx[] = [];
   private lastSeen = new Map<string, number>();
   onLobby?: () => void;
@@ -149,6 +155,7 @@ export class HostSession implements Session {
     const p = this.lobby.players.find((x) => x.pid === pid);
     if (!p) return;
     this.links.get(pid)?.close(); this.links.delete(pid);
+    this.pathSigs.delete(pid);
     if (!this.lobby.started) this.lobby.players = this.lobby.players.filter((x) => x.pid !== pid);
     else {
       p.online = false;
@@ -180,6 +187,12 @@ export class HostSession implements Session {
     this.lobby.started = true;
     this.sentCtrl = state.prov.ctrl.slice();
     this.sentLog = 0;
+    this.sentUnits.clear();
+    this.sentMissiles.clear();
+    this.meDirty.clear();
+    this.dcount = 0;
+    this.lastLoad = 0;
+    this.fxQueue.length = 0;
     this.bus.send({ type: 'start', from: this.pid });
     this.pushLobby();
     for (const l of this.links.values()) if (l.open) void this.sendSnapshot(l, true);
@@ -211,6 +224,7 @@ export class HostSession implements Session {
       if (country && !country.player) country.player = pid; // reconnect
       const err = dispatch(sim, p.country, cmd);
       if (err) this.links.get(pid)?.send({ k: 'err', text: err });
+      else this.meDirty.add(pid); // own country state changed — send it next delta
     }
   }
 
@@ -240,17 +254,31 @@ export class HostSession implements Session {
     const sim = this.sim;
     if (!sim) return;
     sim.update(dt);
-    this.deltaT -= dt; this.snapT -= dt;
-    if (this.fxQueue.length) {
-      const list = this.fxQueue.splice(0, 400);
-      for (const l of this.links.values()) if (l.open && (!l.relay || list.some((f) => f.k === 'launch' || f.k === 'impact' || f.k === 'intercept'))) l.send({ k: 'fx', fx: l.relay ? list.filter((f) => f.k !== 'shot') : list });
-    }
+    this.deltaT -= dt; this.snapT -= dt; this.fxT -= dt;
+    if (this.fxT <= 0) { this.fxT = 0.12; this.flushFx(); }
     const relayOnly = [...this.links.values()].every((l) => l.relay);
-    if (this.deltaT <= 0) { this.deltaT = relayOnly ? 1 : 0.2; this.sendDelta(); }
+    if (this.deltaT <= 0) {
+      this.deltaT = relayOnly ? 1 : this.lastLoad > 350 ? 0.4 : this.lastLoad > 150 ? 0.25 : 0.15;
+      this.sendDelta();
+    }
     if (this.snapT <= 0) { this.snapT = relayOnly ? 10 : 4; for (const l of this.links.values()) if (l.open) void this.sendSnapshot(l, false); }
     // Drop silent peers
     const now = Date.now();
     for (const [pid, t] of this.lastSeen) if (now - t > 30000 && this.lobby.players.find((x) => x.pid === pid)?.online) this.dropPlayer(pid);
+  }
+
+  /** Batch visual events: important kinds first, cosmetic 'shot' fills remaining budget. */
+  private flushFx() {
+    if (!this.fxQueue.length) return;
+    const list = this.fxQueue.splice(0, 800);
+    const important = list.filter((f) => f.k !== 'shot' && f.k !== 'capture');
+    const cosmetic = list.filter((f) => f.k === 'shot' || f.k === 'capture');
+    const ordered = [...important, ...cosmetic].slice(0, 160);
+    for (const l of this.links.values()) {
+      if (!l.open) continue;
+      l.send({ k: 'fx', fx: l.relay ? ordered.filter((f) => f.k !== 'shot') : ordered });
+    }
+    if (this.fxQueue.length > 2000) this.fxQueue.splice(0, this.fxQueue.length - 2000); // shed oldest under sustained flood
   }
 
   private async sendSnapshot(l: Link, full: boolean) {
@@ -277,15 +305,38 @@ export class HostSession implements Session {
     for (const id of this.sentUnits.keys()) if (!seen.has(id)) { rm.push(id); this.sentUnits.delete(id); }
     const pc: (number | string)[][] = [];
     for (let i = 0; i < s.prov.ctrl.length; i++) if (s.prov.ctrl[i] !== this.sentCtrl[i] || s.prov.capture[i] > 0) { pc.push([i, s.prov.ctrl[i], s.prov.owner[i], +s.prov.capture[i].toFixed(2)]); this.sentCtrl[i] = s.prov.ctrl[i]; }
+    // Missiles are immutable after launch (clients advance `elapsed` locally) — send adds/removes only.
+    const madd: Missile[] = [];
+    const seenM = new Set<number>();
+    for (const m of s.missiles) { seenM.add(m.id); if (!this.sentMissiles.has(m.id)) madd.push(m); }
+    const mrm: number[] = [];
+    for (const id of this.sentMissiles) if (!seenM.has(id)) { mrm.push(id); this.sentMissiles.delete(id); }
+    for (const m of madd) this.sentMissiles.add(m.id);
     const newLog = s.log.filter((e) => e.t >= this.sentLog).slice(-40);
     this.sentLog = s.tick;
-    const base = { k: 'd', tick: s.tick, speed: s.speed, tension: s.tension, oil: s.oilPrice, u, add, rm, pc, m: s.missiles, wars: s.wars, log: newLog, players: s.players };
+    this.dcount++;
+    this.lastLoad = u.length + add.length + rm.length + madd.length + pc.length;
+    const base = { k: 'd', tick: s.tick, speed: s.speed, tension: s.tension, oil: s.oilPrice, u, add, rm, pc, m: madd, mr: mrm, wars: s.wars, log: newLog, players: s.players };
     for (const [pid, l] of this.links) {
       if (!l.open) continue;
       const p = this.lobby.players.find((x) => x.pid === pid);
       const me: CountryState | undefined = p?.country ? s.countries[p.country] : undefined;
-      const mine = me ? s.units.filter((x) => x.owner === me.id && x.path.length).map((x) => [x.id, x.path] as const) : [];
-      l.send({ ...base, me, paths: mine, pend: s.pending.filter((x) => x.country === p?.country) });
+      // Unit paths change rarely (waypoint reached / new order) — send only diffs, not every delta.
+      let sigs = this.pathSigs.get(pid);
+      if (!sigs) this.pathSigs.set(pid, (sigs = new Map()));
+      const mine: [number, Unit['path']][] = [];
+      const seenP = new Set<number>();
+      if (me) for (const x of s.units) {
+        if (x.owner !== me.id || !x.path.length) continue;
+        seenP.add(x.id);
+        const head = x.path[0];
+        const sig = `${x.path.length}:${head.lat.toFixed(3)},${head.lon.toFixed(3)}`;
+        if (sigs.get(x.id) !== sig) { sigs.set(x.id, sig); mine.push([x.id, x.path]); }
+      }
+      for (const id of [...sigs.keys()]) if (!seenP.has(id)) sigs.delete(id);
+      // Own country state: every 5th delta (~1s) or immediately after their command.
+      const includeMe = me && (this.dcount % 5 === 0 || this.meDirty.delete(pid));
+      l.send({ ...base, me: includeMe ? me : undefined, paths: mine, pend: s.pending.filter((x) => x.country === p?.country) });
     }
   }
 
@@ -382,8 +433,11 @@ export class ClientSession implements Session {
         sim.reindex();
         for (const [id, path] of (msg.paths as [number, Unit['path']][]) ?? []) { const x = sim.unit(id); if (x) x.path = path; }
         for (const [i, ctrl, owner, cap] of msg.pc as [number, string, string, number][]) { s.prov.ctrl[i] = ctrl; s.prov.owner[i] = owner; s.prov.capture[i] = cap; }
-        const live = new Map(s.missiles.map((m) => [m.id, m]));
-        s.missiles = (msg.m as GameState['missiles']).map((m) => { const old = live.get(m.id); return old && old.elapsed > m.elapsed ? { ...m, elapsed: old.elapsed } : m; });
+        {
+          const live = new Set(s.missiles.map((m) => m.id));
+          for (const m of (msg.m ?? []) as Missile[]) if (!live.has(m.id)) { s.missiles.push(m); live.add(m.id); }
+          if ((msg.mr as number[] | undefined)?.length) { const rmM = new Set(msg.mr as number[]); s.missiles = s.missiles.filter((m) => !rmM.has(m.id)); }
+        }
         s.wars = msg.wars as GameState['wars'];
         s.players = msg.players as GameState['players'];
         for (const e of msg.log as LogEntry[]) if (!s.log.some((x) => x.t === e.t && x.text === e.text)) s.log.push(e);
