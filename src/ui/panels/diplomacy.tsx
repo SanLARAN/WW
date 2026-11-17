@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import { ctl } from '../../client/controller';
 import { ALLIANCE_INFO } from '../../data/countries';
 import { CASUS_BELLI, DIPLO_INFO, type DiploAction } from '../../game/commands';
-import { money, click } from '../util';
+import { money, pct, click } from '../util';
 
 const GROUPS: [string, DiploAction[]][] = [
   ['Отношения', ['improve', 'insult', 'alliance', 'guarantee']],
@@ -105,6 +105,7 @@ export function DiplomacyPanel() {
               {war ? (
                 <div class="card">
                   <b class="small">Война</b>
+                  <div class="tiny muted">Вы контролируете {pct(sim.occupationShare(target.id, me.id))} земель {target.name}{sim.occupationShare(me.id, target.id) > 0 ? ` · под контролем врага ${pct(sim.occupationShare(me.id, target.id))} ваших земель` : ''}</div>
                   <div class="row wrap">
                     <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'peace', target: target.id }))}>Белый мир</button>
                     <button class="btn sm" onClick={click(() => ctl.dispatch({ t: 'diplo', action: 'peaceAnnex', target: target.id }))}>Потребовать капитуляции</button>

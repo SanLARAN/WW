@@ -299,6 +299,14 @@ export class Sim {
     this.invalidateAllies();
   }
 
+  /** Share of `owner`'s provinces currently controlled by `ctrl` (0..1). */
+  occupationShare(owner: string, ctrl: string): number {
+    const P = this.s.prov;
+    let own = 0, held = 0;
+    for (let i = 0; i < P.owner.length; i++) if (P.owner[i] === owner) { own++; if (P.ctrl[i] === ctrl) held++; }
+    return own ? held / own : 0;
+  }
+
   capitulate(c: CountryState) {
     const P = this.s.prov;
     const occupiers = new Set<string>();

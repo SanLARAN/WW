@@ -37,6 +37,7 @@ export function Hud() {
             {icon}<span class="tip">{tip}</span>
             {id === 'research' && c.country && !c.country.research && <span class="dot" />}
             {id === 'focus' && c.country && !c.country.focus && <span class="dot" />}
+            {id === 'diplomacy' && c.country && c.country.flags.some((f) => /peaceoffer_|calltoarms_|allyoffer_|ultimatum_/.test(f)) && <span class="dot" />}
           </button>
         ))}
       </nav>
@@ -57,6 +58,7 @@ export function Hud() {
         </div>
       )}
       <HoverTip />
+      <HintBar />
       <EventModal />
       {c.session && c.session.role !== 'solo' && <Chat />}
       <div class="netstatus">{c.session?.status()}</div>
@@ -202,6 +204,38 @@ function HoverTip() {
   return (
     <div class="hover-tip" style={{ left: c.hoverPos.x + 16, top: c.hoverPos.y + 14 }}>
       <b>{pr.name}</b> <span class="muted">· {ctrl?.name ?? '—'} · {TERRAIN_INFO[pr.terrain].name}</span>
+    </div>
+  );
+}
+
+const HINTS = [
+  'Клик по провинции — здания, ресурсы и дипломатия с её владельцем',
+  'Режимы карты сверху: рельеф, экономика, ресурсы и карта угроз',
+  '📰 Журнал событий — вся история решений и войн',
+  '🤝 Дипломатия: улучшайте отношения, ищите союзников до войны',
+  'Shift + перетаскивание — выделить армию рамкой',
+];
+
+/** Situation-aware tip bar: teaches the loop without a tutorial wall. */
+function HintBar() {
+  const c = ctl;
+  const s = c.state!;
+  const me = c.country;
+  const [hide, setHide] = useState(false);
+  if (!me || hide || c.targeting || c.box) return null;
+  const enemies = c.sim!.enemiesOf(me.id);
+  let hint: string;
+  if (!s.units.some((u) => u.owner === me.id)) hint = 'У вас нет армии — закажите войска в 🏭 «Производство».';
+  else if (me.budget < 0) hint = 'Казна в минусе — поднимите налог или включите печатание денег в 💹 «Экономика».';
+  else if (enemies.length && !c.selectedUnits.size) hint = `Идёт война (${enemies.map((e) => c.sim!.c(e)?.name ?? e).join(', ')}) — выделите войска и прикажите движение ПКМ.`;
+  else if (me.stability < 30) hint = 'Стабильность критична — проверьте ⚖ «Политика»: фракции, мобилизация, режим.';
+  else if (!me.research) hint = 'Выберите технологию для исследования в 🔬 «Технологии».';
+  else if (Object.values(me.missiles).some((n) => n > 0) && !enemies.length) hint = 'Есть ракеты — 🚀 «Ракетные войска» → «Навести», или приберегите для войны.';
+  else hint = HINTS[Math.floor(s.tick / 24 / 3) % HINTS.length];
+  return (
+    <div class="hintbar">
+      <span>💡 {hint}</span>
+      <button class="btn sm ghost" aria-label="Скрыть подсказки" onClick={() => setHide(true)}>✕</button>
     </div>
   );
 }

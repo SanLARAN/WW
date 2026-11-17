@@ -71,9 +71,16 @@ function Overview() {
       </div>
       <div class="section">
         <h3 class="sub">Войны</h3>
-        {wars.length ? wars.map((w) => (
-          <div class="kv" key={w.id}><span class="danger">⚔ {w.name}</span><span>с {fmtDate(dateOf(w.start))}</span></div>
-        )) : <span class="muted small">Мирное время</span>}
+        {wars.length ? wars.map((w) => {
+          const foes = (w.attackers.includes(c.id) ? w.defenders : w.attackers).map((e) => sim.c(e)).filter(Boolean);
+          const score = foes.map((f) => `${f!.name} ${pct(sim.occupationShare(f!.id, c.id))}`).join(' · ');
+          return (
+            <div class="col" key={w.id} style={{ gap: 2 }}>
+              <div class="kv"><span class="danger">⚔ {w.name}</span><span>с {fmtDate(dateOf(w.start))}</span></div>
+              <div class="tiny muted" style={{ paddingLeft: 4 }}>Захвачено территорий: {score || '—'}</div>
+            </div>
+          );
+        }) : <span class="muted small">Мирное время</span>}
       </div>
       <div class="section"><h3 class="sub">Политический компас</h3><Axes v={c.ideology} /></div>
     </div>

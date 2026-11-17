@@ -263,3 +263,5 @@ input[type='text']:focus, input[type='search']:focus, textarea:focus { border-co
   .tb-country { min-width: 180px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+.hintbar { position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 14px; background: rgba(10, 14, 20, 0.82); border: 1px solid var(--line-2); font-size: 12.5px; color: var(--muted); pointer-events: auto; z-index: 4; backdrop-filter: blur(8px); max-width: min(640px, 80vw); }
+.hintbar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
