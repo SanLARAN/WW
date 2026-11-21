@@ -5,6 +5,7 @@ import { ALLIANCE_INFO } from '../../data/countries';
 import { RESOURCE_INFO, type ResourceKey } from '../../data/resources';
 import { PRICE, sanctionPenalty, upkeep, dailyIncome } from '../../game/domestic';
 import { dateOf } from '../../game/types';
+import { objectiveProgress } from '../../game/campaign';
 import { money, num, people, pct, fmtDate, click } from '../util';
 import { ProductionPanel, ArmyPanel, MissilesPanel } from './military';
 import { ResearchPanel, FocusPanel } from './science';
@@ -13,14 +14,14 @@ import { SettingsBody } from './settings';
 import { OpsPanel } from './ops';
 
 const TITLES: Record<Exclude<Panel, null>, string> = {
-  overview: 'Обзор страны', economy: 'Экономика', production: 'Производство', research: 'Технологии', focus: 'Национальные фокусы',
+  campaign: 'Кампания', overview: 'Обзор страны', economy: 'Экономика', production: 'Производство', research: 'Технологии', focus: 'Национальные фокусы',
   diplomacy: 'Дипломатия', army: 'Вооружённые силы', missiles: 'Ракетные войска', politics: 'Внутренняя политика', ops: 'Командование', log: 'Журнал событий', settings: 'Настройки',
 };
 
 export function PanelHost({ panel }: { panel: Exclude<Panel, null> }) {
   const wide = panel === 'research' || panel === 'focus';
   const body: Record<Exclude<Panel, null>, () => ComponentChildren> = {
-    overview: () => <Overview />, economy: () => <Economy />, production: () => <ProductionPanel />, research: () => <ResearchPanel />,
+    campaign: () => <CampaignPanel />, overview: () => <Overview />, economy: () => <Economy />, production: () => <ProductionPanel />, research: () => <ResearchPanel />,
     focus: () => <FocusPanel />, diplomacy: () => <DiplomacyPanel />, army: () => <ArmyPanel />, missiles: () => <MissilesPanel />,
     politics: () => <Politics />, ops: () => <OpsPanel />, log: () => <Log />, settings: () => <SettingsBody inGame />,
   };
@@ -42,6 +43,56 @@ export function Axes({ v }: { v: [number, number, number, number] }) {
       {names.map(([a, b], i) => (
         <div class="axis" key={i}><span>{a}</span><div class="track"><i style={{ left: `${(v[i] + 100) / 2}%` }} /></div><span>{b}</span></div>
       ))}
+    </div>
+  );
+}
+
+/** Objectives, deadline and score — the reason to keep playing past day 30. */
+function CampaignPanel() {
+  const sim = ctl.sim!, c = ctl.country!;
+  const camp = ctl.campaign;
+  if (!camp) return <div class="panel-body muted">Свободная игра: целей нет, делайте что хотите. Начните кампанию из меню, чтобы получить сценарий на 10 лет.</div>;
+  const left = Math.max(0, camp.endsAt - sim.s.tick);
+  const days = Math.floor(left / 24);
+  const total = camp.objectives.reduce((a, o) => a + o.points, 0);
+  return (
+    <div class="col" style={{ gap: 0 }}>
+      <div class="section col" style={{ gap: 6 }}>
+        <div class="row between">
+          <span class="caps">Счёт кампании</span>
+          <b class="mono accent" style={{ fontSize: 18 }}>{camp.score} / {total}</b>
+        </div>
+        <div class="bar ok" style={{ height: 6 }}><i style={{ width: `${Math.min(100, (camp.score / Math.max(1, total)) * 100)}%` }} /></div>
+        <div class="row between small" style={{ marginTop: 4 }}>
+          <span class="muted">До конца кампании</span>
+          <b class="mono">{Math.floor(days / 365)} г {Math.floor((days % 365) / 30)} мес</b>
+        </div>
+        <div class="row between small">
+          <span class="muted">Пик ВВП · провинций</span>
+          <b class="mono">{money(camp.peak.gdp)} · {camp.peak.provinces}</b>
+        </div>
+      </div>
+      <div class="section col" style={{ gap: 8 }}>
+        <h3 class="sub">Цели</h3>
+        {camp.objectives.map((o) => {
+          const done = camp.done[o.id] !== undefined;
+          const pr = objectiveProgress(sim, c.id, o);
+          return (
+            <div key={o.id} class={`objective${done ? ' done' : ''}`}>
+              <div class="row between">
+                <b class="small">{done ? '✓' : '○'} {o.label}</b>
+                <span class={`mono tiny ${done ? 'ok' : 'muted'}`}>{done ? `+${o.points}` : o.points} оч.</span>
+              </div>
+              <span class="tiny muted">{o.hint}</span>
+              <div class={`bar ${done ? 'ok' : ''}`} style={{ marginTop: 3 }}><i style={{ width: `${pr * 100}%` }} /></div>
+            </div>
+          );
+        })}
+      </div>
+      <div class="section row" style={{ gap: 6 }}>
+        <button class="btn sm grow" onClick={click(() => { void ctl.saveNow('1').then(() => ctl.toast('Сохранено в слот 1', 'ok')); })}>Сохранить в слот 1</button>
+        <button class="btn sm grow" onClick={click(() => { void ctl.saveNow('2').then(() => ctl.toast('Сохранено в слот 2', 'ok')); })}>Слот 2</button>
+      </div>
     </div>
   );
 }

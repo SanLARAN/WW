@@ -8,6 +8,8 @@ import type { GameSettings } from '../game/types';
 import { SoloSession, HostSession, ClientSession, LobbyBrowser, type LobbyInfo } from '../net/session';
 import { netMode, supabaseConfig } from '../net/bus';
 import { money, people, useCtl, click } from './util';
+import { latestSave, listSaves, deleteSave, describeSave, type SaveMeta } from '../game/save';
+import { newCampaign } from '../game/campaign';
 import { SettingsBody } from './panels/settings';
 
 const TIER_NAME: Record<Tier, string> = { S: 'Сверхдержавы', A: 'Великие державы', B: 'Региональные державы', C: 'Средние страны', D: 'Малые страны · хардкор' };
@@ -25,8 +27,14 @@ export function Loading() {
 }
 
 export function MainMenu({ onSettings }: { onSettings: () => void }) {
-  const items: [string, string, () => void][] = [
-    ['Одиночная кампания', '2020 → бесконечность, реальные события', () => { ctl.screen = 'select'; ctl.inspectCountry = null; ctl.engine.controls.flyTo(45, 30, 1.9); ctl.bump(); }],
+  ctl.refreshSaves();
+  const latest = latestSave();
+  const items: [string, string, () => void, boolean?][] = [
+    ...(latest ? [[
+      'Продолжить', `${latest.countryName} · ${latest.date} · ${latest.score} оч.`,
+      () => { void ctl.load(latest.slot).then((ok) => { if (ok) audio.startMusic(); }); },
+    ] as [string, string, () => void]] : []),
+    ['Новая кампания', '10 лет у власти, цели и счёт', () => { ctl.screen = 'select'; ctl.inspectCountry = null; ctl.engine.controls.flyTo(45, 30, 1.9); ctl.bump(); }],
     ['Мультиплеер', netMode() === 'online' ? 'до 16 игроков онлайн' : 'P2P по интернету, до 16 игроков', () => { ctl.screen = 'lobby'; ctl.bump(); }],
     ['Настройки', 'звук, сеть, управление', onSettings],
   ];
@@ -132,9 +140,10 @@ function SettingsForm({ s, set, disabled }: { s: GameSettings; set: (p: Partial<
     <div class="col">
       <h3 class="sub">Сценарий</h3>
       <div class="row">
-        <button class={`btn sm${s.mode === 'campaign' ? ' on' : ''}`} disabled={disabled} onClick={() => set({ mode: 'campaign' })}>Кампания 2020+</button>
+        <button class={`btn sm${s.mode === 'campaign' ? ' on' : ''}`} disabled={disabled} onClick={() => set({ mode: 'campaign' })}>Кампания · 10 лет</button>
         <button class={`btn sm${s.mode === 'sandbox' ? ' on' : ''}`} disabled={disabled} onClick={() => set({ mode: 'sandbox', historical: false })}>Песочница</button>
       </div>
+      <span class="tiny muted">{s.mode === 'campaign' ? 'Кампания: цели, счёт и финал через 10 лет. Автосохранение.' : 'Песочница: без целей и срока — свободная игра.'}</span>
       <label class="row small"><input type="checkbox" checked={s.historical} disabled={disabled || s.mode === 'sandbox'} onChange={(e) => set({ historical: (e.target as HTMLInputElement).checked })} /> Исторические боты (следуют реальным событиям)</label>
       <h3 class="sub">Сложность ботов</h3>
       <div class="row wrap">
@@ -164,7 +173,8 @@ export function CountrySelect() {
     state.countries[id].player = ctl.playerId;
     state.players[ctl.playerId] = { name: ctl.playerName, country: id, color: state.countries[id].color };
     const sim = createSim(ctl.world, state);
-    ctl.attach(sim, new SoloSession(sim, id), id);
+    const campaign = settings.mode === 'campaign' ? newCampaign(sim, id) : null;
+    ctl.attach(sim, new SoloSession(sim, id), id, campaign);
     audio.startMusic();
   };
   return (
@@ -319,6 +329,89 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       <div class="panel event" role="dialog" aria-modal="true" aria-label="Настройки">
         <div class="panel-head"><h2 class="panel-title">Настройки</h2><button class="btn sm ghost" onClick={click(onClose)} aria-label="Закрыть">✕</button></div>
         <div class="panel-body"><SettingsBody inGame={false} /></div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================================================ saves & ending
+/** Load / delete slots, reachable from the menu and from the in-game settings. */
+export function SaveManager({ onClose }: { onClose: () => void }) {
+  const [, set] = useState(0);
+  const saves = listSaves();
+  const slots: (SaveMeta | null)[] = ['auto', '1', '2', '3'].map((s) => saves.find((m) => m.slot === s) ?? null);
+  return (
+    <div class="modal-back">
+      <div class="panel" style={{ width: 'min(560px, 92vw)' }} role="dialog" aria-modal="true">
+        <div class="panel-head">
+          <h2 class="panel-title">Сохранения</h2>
+          <button class="btn sm ghost" aria-label="Закрыть" onClick={click(onClose)}>✕</button>
+        </div>
+        <div class="panel-body col" style={{ gap: 6 }}>
+          {slots.map((m, i) => {
+            const slot = ['auto', '1', '2', '3'][i];
+            return (
+              <div class={`save-row${m ? '' : ' empty'}`} key={slot}>
+                <div class="col" style={{ gap: 2 }}>
+                  <b class="small">{slot === 'auto' ? 'Автосохранение' : `Слот ${slot}`}</b>
+                  <span class="tiny muted">{m ? describeSave(m) : 'пусто'}</span>
+                </div>
+                <div class="row" style={{ gap: 4 }}>
+                  {m && !m.alive && <span class="tiny danger">кампания проиграна</span>}
+                  {m && <button class="btn sm" onClick={click(() => { void ctl.load(m.slot).then((ok) => { if (ok) { onClose(); audio.startMusic(); } }); })}>Загрузить</button>}
+                  {m && <button class="btn sm ghost danger" aria-label="Удалить" onClick={click(() => { deleteSave(m.slot); set((x) => x + 1); ctl.refreshSaves(); })}>🗑</button>}
+                </div>
+              </div>
+            );
+          })}
+          {!saves.length && <span class="muted small">Сохранений пока нет — начните кампанию, прогресс пишется сам каждые 45 секунд.</span>}
+          <span class="tiny muted">Сохранение хранится в этом браузере (gzip в localStorage) и переживает перезагрузку страницы.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** End-of-campaign screen: verdict, score breakdown, next steps. */
+export function EndingScreen() {
+  const c = useCtl();
+  const camp = c.campaign;
+  const e = c.ending;
+  if (!camp || !e) return null;
+  const total = camp.objectives.reduce((a, o) => a + o.points, 0);
+  return (
+    <div class="modal-back ending">
+      <div class="panel ending-panel" role="dialog" aria-modal="true">
+        <div class={`ending-hero ${e.won ? 'won' : 'lost'}`}>
+          <span class="ending-glyph">{e.won ? '🏆' : '🏁'}</span>
+          <div class="col" style={{ gap: 4 }}>
+            <span class="caps">{c.country?.name} · итог десятилетия</span>
+            <h2 class="ending-title">{e.title}</h2>
+            <p class="ending-text">{e.text}</p>
+          </div>
+        </div>
+        <div class="panel-body col" style={{ gap: 10 }}>
+          <div class="row between">
+            <span class="caps">Итоговый счёт</span>
+            <b class="ending-score mono">{e.score} / {total}</b>
+          </div>
+          <div class="bar ok" style={{ height: 8 }}><i style={{ width: `${Math.min(100, (e.score / Math.max(1, total)) * 100)}%` }} /></div>
+          <div class="col" style={{ gap: 4, marginTop: 6 }}>
+            {camp.objectives.map((o) => {
+              const done = camp.done[o.id] !== undefined;
+              return (
+                <div class="row between small" key={o.id}>
+                  <span class={done ? 'ok' : 'muted'}>{done ? '✓' : '○'} {o.label}</span>
+                  <span class="mono tiny">{done ? `+${o.points}` : '0'} / {o.points}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div class="row" style={{ gap: 6, marginTop: 8 }}>
+            <button class="btn primary grow" onClick={click(() => { c.ending = null; c.panel = null; c.bump(); })}>Вернуться в мир (свободная игра)</button>
+            <button class="btn" onClick={click(() => { c.ending = null; c.session?.leave(); c.screen = 'select'; c.bump(); })}>Новая кампания</button>
+          </div>
+        </div>
       </div>
     </div>
   );

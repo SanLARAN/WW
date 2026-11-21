@@ -66,7 +66,8 @@ export function dailyDomestic(sim: Sim) {
     use.oil += (c.gdp / 1500) * (1 + sim.mod(c, 'oil_use'));
     use.gas += (c.gdp / 2500) * Math.max(0.3, 1 - npp * 0.15);
     use.uranium += npp * 0.1;
-    const sanc = sanctionPenalty(sim, c);
+    const sancBase = sanctionPenalty(sim, c);
+    let sanc = sancBase;
     let trade = 0;
     for (const r of RES) {
       c.stock[r] += prod[r] - use[r];
@@ -80,6 +81,11 @@ export function dailyDomestic(sim: Sim) {
     }
     c.prod = prod; c.use = use;
 
+    // ---- Blockade: enemy navies sitting on our coast strangle trade. It must bite
+    // in the treasury (that is the whole point), not just in the goods list.
+    const blocked = sim.blockadeLevel(c.id);
+    if (blocked > 0) { trade *= 1 - Math.min(0.85, blocked * 0.7); sanc = Math.max(sanc, blocked * 0.5); }
+
     // ---- Economy
     let growth = GROWTH[c.econ] + sim.mod(c, 'gdp') + (c.tech - 5) * 0.15 - c.corruption * 0.02 + (c.stability - 50) * 0.03
       - c.warExhaustion * 0.04 - sanc * 12 - Math.max(0, c.tax - 0.35) * 12 - Math.max(0, c.inflation - 4) * 0.15 + factories * 0.02 + npp * 0.05;
@@ -89,7 +95,7 @@ export function dailyDomestic(sim: Sim) {
     c.gdpGrowth = growth;
     const occupied = provs.length ? provs.filter((i) => P.owner[i] === c.id).reduce((a, i) => a + sim.world.provinces[i].popShare, 0) : 0;
     c.gdp *= 1 + growth / 100 / 365;
-    const income = dailyIncome(sim, c) * Math.max(0.2, occupied) + trade + (c.printing ? c.gdp * 0.0004 : 0);
+    const income = dailyIncome(sim, c) * Math.max(0.2, occupied) * (1 - blocked * 0.55) + trade + (c.printing ? c.gdp * 0.0004 : 0);
     const research = (c.gdp * c.researchShare) / 365 * 0.15;
     const interest = (c.debt * 0.02) / 365;
     const exp = upkeep(sim, c) + research + interest;

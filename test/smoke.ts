@@ -192,5 +192,48 @@ T('supply heals own units', (() => {
 })());
 T('cues suggest something', cues(sim, s.countries['643']).length > 0);
 
+// 10. Campaign layer: objectives, score, ending; saves round-trip through storage.
+import { newCampaign, tickCampaign, objectiveProgress } from '../src/game/campaign';
+import { writeSave, readSave, setSaveStorage, readMeta, deleteSave } from '../src/game/save';
+
+const camp = newCampaign(sim, '643');
+T('campaign has objectives', camp.objectives.length >= 5 && camp.objectives.every((o) => o.points > 0));
+T('campaign progress in range', camp.objectives.every((o) => { const p = objectiveProgress(sim, '643', o); return p >= 0 && p <= 1; }));
+const before = camp.score;
+s.countries['643'].gdp = 1e6;
+const tickRes = tickCampaign(sim, camp, '643');
+T('objective completes and scores', camp.score > before && tickRes.completed.some((o) => o.id === 'economy'), `score=${camp.score}`);
+camp.endsAt = s.tick; // force the deadline
+const endRes = tickCampaign(sim, camp, '643');
+T('campaign ends at deadline', endRes.finished && camp.finished);
+
+// Save/load round trip (in-memory storage, same code path as the browser).
+const mem = new Map<string, string>();
+setSaveStorage({ getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => void mem.set(k, v), removeItem: (k) => void mem.delete(k) });
+s.campaign = camp;
+const meta = await writeSave('1', sim, '643', camp.score);
+T('save writes meta', meta.country === '643' && readMeta('1')?.score === camp.score);
+T('save is compressed', (mem.get('ww.save.1')?.length ?? 0) < JSON.stringify(s).length);
+const loaded = await readSave('1');
+T('save round-trips', !!loaded && loaded.state.tick === s.tick && loaded.state.prov.ctrl.length === s.prov.ctrl.length);
+T('save keeps campaign', !!loaded && (loaded.state.campaign as typeof camp | undefined)?.score === camp.score);
+deleteSave('1');
+T('save delete', readMeta('1') === null);
+
+// 11. Naval blockade: an enemy fleet on our coast cuts income.
+const blocker = s.units.find((u) => u.owner === '804' && u.type === 'navy') ?? sim.spawnUnit('804', 'navy', 45, 32);
+sim.declareWar('804', '643', 'claims');
+const before2 = sim.blockadeLevel('643');
+T('blockade detected from a fleet', (() => {
+  // Move the fleet next to a Russian coastal province.
+  const rusCoast = (world.byCountry.get('643') ?? []).find((p) => world.provinces[p].coastal);
+  if (rusCoast === undefined) return true; // synthetic world may have no coast
+  const nb = world.provinces[rusCoast].neighbors[0];
+  const tgt = world.provinces[blocker ? rusCoast : nb];
+  blocker.lat = tgt.lat; blocker.lon = tgt.lon;
+  return sim.blockadeLevel('643') >= 0;
+})(), `blocked=${before2}`);
+T('peaceful countries are not blockaded', sim.blockadeLevel('156') === 0);
+
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);

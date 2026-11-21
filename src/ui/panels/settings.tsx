@@ -3,11 +3,13 @@ import { audio, type AudioSettings } from '../../audio/audio';
 import { ctl } from '../../client/controller';
 import { netMode } from '../../net/bus';
 import { click } from '../util';
+import { SaveManager } from '../screens';
 
 export function SettingsBody({ inGame }: { inGame: boolean }) {
   const [s, setS] = useState({ ...audio.settings });
   const [url, setUrl] = useState(localStorage.getItem('ww.sb.url') ?? '');
   const [key, setKey] = useState(localStorage.getItem('ww.sb.key') ?? '');
+  const [manager, setManager] = useState(false);
   const upd = (p: Partial<AudioSettings>) => { const n = { ...s, ...p }; setS(n); Object.assign(audio.settings, n); audio.unlock(); audio.apply(); };
   const vol: [keyof AudioSettings, string][] = [['master', 'Общая громкость'], ['music', 'Музыка'], ['sfx', 'Эффекты и взрывы'], ['ambient', 'Радиоэфир'], ['ui', 'Интерфейс']];
   return (
@@ -49,8 +51,23 @@ export function SettingsBody({ inGame }: { inGame: boolean }) {
         ))}
       </div>
       {inGame && (
-        <div class="section"><button class="btn danger" onClick={click(() => { if (confirm('Выйти в главное меню? Прогресс одиночной игры будет потерян.')) { ctl.session?.leave(); location.reload(); } })}>Выйти в главное меню</button></div>
+        <div class="section col">
+          <h3 class="sub">Сохранение</h3>
+          <div class="row wrap">
+            <button class="btn sm" onClick={click(() => { void ctl.saveNow('auto').then(() => ctl.toast('Сохранено (автослот)', 'ok')); })}>Быстрое сохранение</button>
+            <button class="btn sm" onClick={click(() => { void ctl.saveNow('1').then(() => ctl.toast('Сохранено в слот 1', 'ok')); })}>Слот 1</button>
+            <button class="btn sm" onClick={click(() => { void ctl.saveNow('2').then(() => ctl.toast('Сохранено в слот 2', 'ok')); })}>Слот 2</button>
+            <button class="btn sm" onClick={click(() => setManager(true))}>Все сохранения…</button>
+          </div>
+          <span class="tiny muted">Одиночная игра сохраняется автоматически каждые 45 секунд.</span>
+        </div>
       )}
+      {inGame && (
+        <div class="section col">
+          <button class="btn danger" onClick={click(() => { if (confirm('Выйти в главное меню? Автосейв уже записан — прогресс можно будет продолжить.')) { void ctl.saveNow('auto').then(() => { ctl.session?.leave(); location.reload(); }); } })}>Выйти в главное меню</button>
+        </div>
+      )}
+      {manager && <SaveManager onClose={() => setManager(false)} />}
     </div>
   );
 }

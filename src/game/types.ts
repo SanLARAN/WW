@@ -151,6 +151,8 @@ export interface GameState {
   tension: number; // world tension 0..100
   oilPrice: number;
   players: Record<string, { name: string; country: string; color: string }>;
+  /** Campaign objectives/score — saved with the game so a load resumes mid-run. */
+  campaign?: unknown;
 }
 
 export const START_DATE = Date.UTC(2020, 0, 1, 0);

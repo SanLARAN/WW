@@ -432,6 +432,31 @@ export class Sim {
     return wc === owner || wc === '010' || this.friendly(wc, owner) || this.atWar(wc, owner);
   }
 
+  /**
+   * How badly `country` is blockaded, 0..1. An enemy fleet within 900 km of one of
+   * our coastal provinces counts; two hostile fleets cut trade almost entirely.
+   * The navy screen has been asking to exist for a while — this is it.
+   */
+  private blockCache: { tick: number; map: Map<string, number> } | null = null;
+  blockadeLevel(country: string): number {
+    if (!this.blockCache || this.blockCache.tick !== this.s.tick) {
+      const map = new Map<string, number>();
+      for (const u of this.s.units) {
+        if (UNIT[u.type].domain !== 'sea') continue;
+        const p = this.world.provinceAt(u.lat, u.lon);
+        if (p < 0 || !this.world.provinces[p].coastal) continue;
+        // A fleet blockades the province it sits off and everything adjacent.
+        for (const q of [p, ...this.world.provinces[p].neighbors]) {
+          const t = this.s.prov.ctrl[q];
+          if (t === u.owner || t === '010' || !this.atWar(u.owner, t)) continue;
+          map.set(t, (map.get(t) ?? 0) + 0.45);
+        }
+      }
+      this.blockCache = { tick: this.s.tick, map };
+    }
+    return Math.min(1, this.blockCache.map.get(country) ?? 0);
+  }
+
   private moveUnits() {
     for (const u of this.s.units) {
       if (!u.path.length) continue;

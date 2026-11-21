@@ -15,9 +15,13 @@ import { toXYZ } from '../core/geo';
 import { cities } from '../data/cities';
 import { countryDefs } from '../data/countries';
 import type { Session } from '../net/session';
+import { SoloSession as Solo } from '../net/session';
+import { createSim } from '../game/game';
+import { newCampaign, tickCampaign, verdict, type CampaignState } from '../game/campaign';
+import { writeSave, readSave, latestSave, readMeta, SLOTS as SLOTS_ALL, type SaveMeta } from '../game/save';
 
 export type MapMode = 'political' | 'terrain' | 'diplomacy' | 'economy' | 'military' | 'airdefense' | 'resources' | 'threat';
-export type Panel = null | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'ops' | 'log' | 'settings';
+export type Panel = null | 'campaign' | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'ops' | 'log' | 'settings';
 
 export interface Toast { id: number; text: string; kind: LogEntry['kind'] | 'error' | 'ok'; t: number }
 
@@ -52,6 +56,12 @@ export class Controller {
   hoverProvince = -1;
   hoverPos: { x: number; y: number } | null = null;
   targeting: { missile: MissileType; count: number } | null = null;
+  /** Campaign state (objectives/score) — present only in campaign mode. */
+  campaign: CampaignState | null = null;
+  /** Set when the run is over: the UI shows the ending screen. */
+  ending: { title: string; text: string; score: number; won: boolean } | null = null;
+  saves: SaveMeta[] = [];
+  private saveTimer = 0;
   /** Alt-click strike mode: no missile choice, the sim spawns what is available. */
   strikeMode = false;
   /** Live hover preview for the bottom status readout. */
@@ -125,10 +135,13 @@ export class Controller {
   }
 
   // ------------------------------------------------------------------------------------------ game lifecycle
-  attach(sim: Sim, session: Session, me: string | null) {
+  attach(sim: Sim, session: Session, me: string | null, campaign: CampaignState | null = null) {
     this.sim = sim;
     this.session = session;
     this.me = me;
+    this.campaign = campaign ?? (me && sim.s.settings.mode === 'campaign' ? newCampaign(sim, me) : null);
+    this.ending = null;
+    this.saveTimer = 45;
     this.screen = 'game';
     this.selectedUnits.clear();
     this.selectedProvince = -1;
@@ -143,6 +156,41 @@ export class Controller {
     }
     audio.setIntensity(0.1);
     this.bump();
+  }
+
+  /** Write a slot. Safe to call often — it is gzip + localStorage. */
+  async saveNow(slot = 'auto') {
+    if (!this.sim) return null;
+    // Campaign progress rides inside the state so load() resumes it verbatim.
+    if (this.campaign) this.sim.s.campaign = this.campaign;
+    const meta = await writeSave(slot, this.sim, this.me, this.campaign?.score ?? 0);
+    this.refreshSaves();
+    return meta;
+  }
+
+  refreshSaves() { this.saves = SLOTS_ALL.map((x) => readMeta(x)).filter((m): m is SaveMeta => !!m).sort((a, b) => b.savedAt - a.savedAt); }
+
+  /** Load a slot and take the player straight back into the game. */
+  async load(slot: string) {
+    const p = await readSave(slot);
+    if (!p) { this.toast('Сохранение не найдено или повреждено', 'error'); return false; }
+    const sim = createSim(this.world, p.state);
+    const me = p.meta.country || null;
+    if (me && p.state.countries[me]) p.state.countries[me].player = this.playerId;
+    // Rebuild campaign progress from the save if it exists in state (multiplayer-safe).
+    const saved = (p.state.campaign as CampaignState | undefined) ?? null;
+    const camp = saved ?? (me ? newCampaign(sim, me) : null);
+    this.attach(sim, new Solo(sim, me ?? ''), me, camp);
+    this.screen = 'game';
+    this.refreshSaves();
+    this.bump();
+    return true;
+  }
+
+  continueGame() {
+    const m = latestSave();
+    if (!m) { this.toast('Нет сохранений', 'error'); return Promise.resolve(false); }
+    return this.load(m.slot);
   }
 
   colorOf(owner: string): THREE.Color {
@@ -249,6 +297,22 @@ export class Controller {
     this.engine.alert = siren ? 0.8 : 0;
     audio.setIntensity(Math.min(1, (inWar ? 0.5 : 0.1) + s.tension / 200));
 
+    // Campaign objectives tick once a game day, autosave every ~45 s of play.
+    if (this.campaign && this.me && !this.campaign.finished) {
+      const res = tickCampaign(sim, this.campaign, this.me);
+      for (const o of res.completed) this.toast(`✅ Цель выполнена: ${o.label} (+${o.points})`, 'ok');
+      if (res.finished) {
+        const v = verdict(this.campaign, s, this.me);
+        this.ending = { title: v.title, text: v.text, score: this.campaign.score, won: res.won };
+        this.toast(res.won ? '🏆 Кампания завершена победой' : '🏁 Кампания завершена', res.won ? 'ok' : 'alert');
+        void this.saveNow('auto');
+      }
+    }
+    if (this.session?.role === 'solo' && this.campaign && !this.campaign.finished) {
+      this.saveTimer -= dt;
+      if (this.saveTimer <= 0) { this.saveTimer = 45; void this.saveNow('auto'); }
+    }
+
     this.uiTimer -= dt;
     if (this.uiTimer <= 0) {
       this.uiTimer = 0.2;
@@ -311,6 +375,10 @@ export class Controller {
     const mode = this.mapMode;
     const enemies = new Set(me ? sim.enemiesOf(me) : []);
     const allies = new Set(me ? sim.militaryAllies(me) : []);
+    // Blockaded by an enemy fleet: paint the coast deep red so it is impossible to miss.
+    const blockaded = me ? sim.blockadeLevel(me) : 0;
+    const hostileFleet = new Set<string>();
+    if (me && blockaded > 0) for (const u of s.units) if (UNIT[u.type].domain === 'sea' && sim.atWar(u.owner, me)) hostileFleet.add(u.owner);
     const threat = new Float32Array(w.provinces.length);
     if (mode === 'threat' && me) {
       for (const u of s.units) if (enemies.has(u.owner)) {
@@ -333,6 +401,7 @@ export class Controller {
       if (this.inspectCountry && ctrl === this.inspectCountry) glow = 90;
       if (enemies.has(ctrl) && me && p.neighbors.some((n) => s.prov.ctrl[n] === me)) pulse = 180;
       if ((s.prov.capture[p.id] ?? 0) > 0.05) pulse = 255;
+      if (blockaded > 0 && hostileFleet.has(owner) && p.coastal && ctrl === me) { ownerRgb = ctrlRgb = [180, 40, 40]; mix = 210; }
       switch (mode) {
         case 'terrain': {
           ctrlRgb = ownerRgb = hexToRgb(TERRAIN_COLOR[p.terrain]);

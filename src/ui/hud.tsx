@@ -10,10 +10,11 @@ import type { BuildingType } from '../game/types';
 import { money, num, people, fmtDate, fmtTime, useCtl, click } from './util';
 import { cues, opsPoints, OPS_CAP } from '../game/strategy';
 import { PanelHost } from './panels';
+import { EndingScreen } from './screens';
 import { UNIT_TYPES } from '../render/units';
 
 const NAV: [Exclude<Panel, null>, string, string][] = [
-  ['overview', '🏛', 'Обзор страны'], ['economy', '💹', 'Экономика'], ['production', '🏭', 'Производство'], ['research', '🔬', 'Технологии'],
+  ['overview', '🏛', 'Обзор страны'], ['campaign', '🏆', 'Кампания'], ['economy', '💹', 'Экономика'], ['production', '🏭', 'Производство'], ['research', '🔬', 'Технологии'],
   ['focus', '🎯', 'Национальные фокусы'], ['diplomacy', '🤝', 'Дипломатия'], ['ops', '⚡', 'Командование'], ['army', '🪖', 'Вооружённые силы'], ['missiles', '🚀', 'Ракетные войска'],
   ['politics', '⚖', 'Внутренняя политика'], ['log', '📰', 'Журнал событий'], ['settings', '⚙', 'Настройки'],
 ];
@@ -65,6 +66,7 @@ export function Hud() {
       <StatusBar />
       <HintBar />
       <EventModal />
+      <EndingScreen />
       {c.session && c.session.role !== 'solo' && <Chat />}
       <div class="netstatus">{c.session?.status()}</div>
     </>
@@ -100,6 +102,11 @@ function TopBar() {
         </div>
       )}
       {me && <WarStrip />}
+      {c.campaign && (
+        <button class="defcon campaign-chip" title="Цели кампании, срок и счёт" onClick={click(() => { c.panel = c.panel === 'campaign' ? null : 'campaign'; c.bump(); })}>
+          <span class="caps">Кампания</span><b>{c.campaign.score}</b>
+        </button>
+      )}
       <div class="defcon" title={`Мировая напряжённость ${s.tension.toFixed(0)}`}>
         <span class="caps">DEFCON</span><b style={{ color: defcon <= 2 ? 'var(--danger)' : defcon === 3 ? 'var(--accent)' : 'var(--ok)' }}>{defcon}</b>
       </div>
@@ -140,6 +147,7 @@ function WarStrip() {
         <i style={{ width: `${Math.min(100, 50 + balance * 120)}%` }} />
       </span>
       <span class="tiny">{verdict}</span>
+      {c.sim!.blockadeLevel(me.id) > 0 && <span class="tiny danger" title="Вражеский флот блокирует побережье: торговля и доход режутся">⚓ блокада</span>}
       <span class="tiny muted">⚡{opsPoints(sim, me)}</span>
     </div>
   );
