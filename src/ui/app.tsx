@@ -30,6 +30,8 @@ export function App(): JSX.Element {
   const [name, setName] = useState(() => localStorage.getItem('kotel.name') ?? 'Комбат');
   const [muted, setMuted] = useState(false);
   const [netStatus, setNetStatus] = useState('');
+  /** when set, the next match starts after the cutscene */
+  const pendingStart = useRef<null | 'solo'>(null);
   const [peers, setPeers] = useState<string[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -42,6 +44,7 @@ export function App(): JSX.Element {
   const s = useStore(gameState);
 
   // keep a reference for the net callbacks (they outlive a render)
+  const seenCutscene = useRef(localStorage.getItem('kotel.cutscene') === '1');
   const cbRef = useRef({ setScreen, setOver, setPaused });
   cbRef.current = { setScreen, setOver, setPaused };
 
@@ -170,6 +173,11 @@ export function App(): JSX.Element {
           settings={{ ...settings, sensitivity: settings.sensitivity }}
           setSettings={(v) => { setSettings(v); setProfile((p) => ({ ...p, sensitivity: v.sensitivity })); }}
           onStart={() => {
+            if (!seenCutscene.current) {
+              pendingStart.current = 'solo';
+              setScreen('cutscene');
+              return;
+            }
             const net = netRef.current;
             const hosting = !!net && net.role === 'host';
             startMatch({ net: hosting ? net : null, host: true });
@@ -214,7 +222,18 @@ export function App(): JSX.Element {
       {screen === 'cutscene' && (
         <CutsceneOverlay
           seed={settings.seed}
-          onDone={() => { setScreen('lobby'); }}
+          onDone={() => {
+            localStorage.setItem('kotel.cutscene', '1');
+            seenCutscene.current = true;
+            if (pendingStart.current) {
+              pendingStart.current = null;
+              const net = netRef.current;
+              const hosting = !!net && net.role === 'host';
+              startMatch({ net: hosting ? net : null, host: true });
+            } else {
+              setScreen('lobby');
+            }
+          }}
           audio={audioRef.current}
         />
       )}

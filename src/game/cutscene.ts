@@ -154,13 +154,14 @@ export function playCutscene(engine: Engine, layout: Layout, audio: AudioEngine,
     return !done;
   };
 
-  let beatHandler: (i: number) => void = () => {};
-  const onBeat = (i: number) => beatHandler(i);
+  const onBeat = (i: number) => { if (handlers.beat) handlers.beat(i); };
   const finish = () => {
     if (done) return;
     done = true;
     rotor?.stop();
   };
+
+  const handlers: { beat?: (i: number) => void } = {};
 
   return {
     update: tick,
@@ -175,8 +176,7 @@ export function playCutscene(engine: Engine, layout: Layout, audio: AudioEngine,
       void started;
       void onDone;
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setBeatHandler: (fn: (i: number) => void) => { beatHandler = fn; },
+    setBeatHandler: (fn: (i: number) => void) => { handlers.beat = fn; },
   } as CutsceneHandle & { setBeatHandler: (fn: (i: number) => void) => void };
 }
 
