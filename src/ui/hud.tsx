@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { ctl, type MapMode, type Panel } from '../client/controller';
 import { audio } from '../audio/audio';
 import { dateOf } from '../game/types';
@@ -25,8 +25,11 @@ const MODES: [MapMode, string, string][] = [
 export function Hud() {
   const c = useCtl();
   const s = c.state;
+  const targeting = !!c.targeting;
+  // DOM class sync belongs in an effect — writing it during render tripped React's
+  // concurrent renderer every frame the HUD re-rendered.
+  useEffect(() => { document.body.classList.toggle('targeting', targeting); }, [targeting]);
   if (!s) return null;
-  document.body.classList.toggle('targeting', !!c.targeting);
   return (
     <>
       <TopBar />

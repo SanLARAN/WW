@@ -164,12 +164,28 @@ export class Sim {
         if (!list.length) this.s.wars.splice(this.s.wars.indexOf(w), 1);
       }
     }
+    // A peace settlement transcribes ownership only where the winner has boots on
+    // the ground (otherwise "annexation" would seize the whole country in one click
+    // and wipe a nation off the map without a single battle).
+    const held: number[] = [];
     for (let i = 0; i < P.owner.length; i++) {
       const owner = P.owner[i], ctrl = P.ctrl[i];
-      if (owner === b && ctrl === a) { if (annex) P.owner[i] = a; else P.ctrl[i] = b; }
+      if (owner === b && ctrl === a) { held.push(i); if (!annex) P.ctrl[i] = b; }
       else if (owner === a && ctrl === b) P.ctrl[i] = a;
       else continue;
       P.capture[i] = 0; P.captureBy[i] = null;
+    }
+    if (annex) {
+      const ctrlCells = new Set<number>();
+      for (const u of this.s.units) {
+        if (u.owner !== a && u.owner !== b) continue;
+        for (const q of this.near(u.lat, u.lon, 120)) { const p = this.world.provinceAt(q.lat, q.lon); if (p >= 0) ctrlCells.add(p); }
+      }
+      for (const i of held) {
+        const grounded = ctrlCells.has(i) || this.world.provinces[i].neighbors.some((n) => ctrlCells.has(n));
+        if (grounded) P.owner[i] = a;
+        else { P.owner[i] = b; P.ctrl[i] = b; }
+      }
     }
     this.setRel(a, b, -30);
     const A = this.c(a), B = this.c(b);
@@ -299,12 +315,58 @@ export class Sim {
     this.invalidateAllies();
   }
 
+  private unitsCache: { tick: number; map: Map<string, Unit[]> } | null = null;
+  /** Units of one country. Cached per tick — the AI asks for this constantly. */
+  unitsOf(owner: string): Unit[] {
+    if (!this.unitsCache || this.unitsCache.tick !== this.s.tick) {
+      const map = new Map<string, Unit[]>();
+      for (const u of this.s.units) {
+        const l = map.get(u.owner);
+        if (l) l.push(u); else map.set(u.owner, [u]);
+      }
+      this.unitsCache = { tick: this.s.tick, map };
+    }
+    return this.unitsCache.map.get(owner) ?? [];
+  }
+
+  private ownerCache: { tick: number; map: Map<string, number[]> } | null = null;
+  /** Provinces a country owns (regardless of who controls them). Cached per tick. */
+  ownedProvinces(owner: string): number[] {
+    if (!this.ownerCache || this.ownerCache.tick !== this.s.tick) {
+      const map = new Map<string, number[]>();
+      const own = this.s.prov.owner;
+      for (let i = 0; i < own.length; i++) {
+        const l = map.get(own[i]);
+        if (l) l.push(i); else map.set(own[i], [i]);
+      }
+      this.ownerCache = { tick: this.s.tick, map };
+    }
+    return this.ownerCache.map.get(owner) ?? [];
+  }
+
+  private ctrlCache: { tick: number; map: Map<string, number[]> } | null = null;
+  /** Provinces currently controlled by each country. Cached per tick. */
+  provsByCtrl(): Map<string, number[]> {
+    if (this.ctrlCache && this.ctrlCache.tick === this.s.tick) return this.ctrlCache.map;
+    const map = new Map<string, number[]>();
+    const ctrl = this.s.prov.ctrl;
+    for (let i = 0; i < ctrl.length; i++) {
+      const k = ctrl[i];
+      const l = map.get(k);
+      if (l) l.push(i); else map.set(k, [i]);
+    }
+    this.ctrlCache = { tick: this.s.tick, map };
+    return map;
+  }
+
   /** Share of `owner`'s provinces currently controlled by `ctrl` (0..1). */
   occupationShare(owner: string, ctrl: string): number {
     const P = this.s.prov;
-    let own = 0, held = 0;
-    for (let i = 0; i < P.owner.length; i++) if (P.owner[i] === owner) { own++; if (P.ctrl[i] === ctrl) held++; }
-    return own ? held / own : 0;
+    const own = this.ownedProvinces(owner);
+    if (!own.length) return 0;
+    let held = 0;
+    for (const i of own) if (P.ctrl[i] === ctrl) held++;
+    return held / own.length;
   }
 
   capitulate(c: CountryState) {
@@ -374,7 +436,11 @@ export class Sim {
     for (const u of this.s.units) {
       if (!u.path.length) continue;
       const st = UNIT[u.type];
-      if (st.domain === 'land' && u.engaged === 0 && u.type !== 'drones') continue; // pinned by combat
+      // Units in contact still move — slowly — so an army is never permanently
+      // glued to the spot by a distant enemy brigade. `hold` means hold.
+      if (u.hold && st.domain === 'land') continue;
+      // Speeds are km/h: one simulation hour = one hour of marching. Air and naval
+      // units cross whole theatres per hour, ground brigades ~30-70 km/day.
       let km = st.speed;
       let myP = -1;
       if (st.domain === 'land') {
@@ -383,8 +449,13 @@ export class Sim {
         km *= onLand ? TERRAIN_INFO[this.world.provinces[myP].terrain].move * this.weather(u.lat).move : 12;
         if (u.type === 'drones') km = st.speed;
         km *= 0.5 + u.org / 200;
+        // Mobilised, road-bound march rate: ~60-140 km per simulated day.
+        km *= 5;
+        // Marching while under fire is slow and costly.
+        if (u.engaged === 0) km *= 0.35;
       }
-      while (km > 0 && u.path.length) {
+      let guard = 0;
+      while (km > 0 && u.path.length && guard++ < 5000) {
         const wp = u.path[0];
         if (st.domain === 'land' && u.type !== 'drones') {
           const wpP = this.world.provinceAt(wp.lat, wp.lon);
@@ -395,8 +466,9 @@ export class Sim {
         }
         const d = distKm(u.lat, u.lon, wp.lat, wp.lon);
         const r = stepToward(u.lat, u.lon, wp.lat, wp.lon, km);
+        const moved = d - distKm(r.lat, r.lon, wp.lat, wp.lon);
         u.lat = r.lat; u.lon = r.lon;
-        km -= Math.min(km, d);
+        km -= moved > 0 ? moved : d > 0 ? Math.min(km, d) : 0;
         if (r.arrived) u.path.shift();
       }
     }
@@ -435,9 +507,11 @@ export class Sim {
       const defMod = (tst.domain === 'land' ? TERRAIN_INFO[terr].defense * urban * fort : 1) * (t.type === 'armor' ? 1 + this.mod(B, 'def_armor') : 1) * (t.type === 'air' ? 1 + this.mod(B, 'air_def') : 1);
       const defense = tst.def * defMod * techB * (1 + t.xp * 0.3) * (t.engaged > 6 && tst.domain === 'land' ? 1.15 : 1);
       const embarked = tst.domain === 'land' && p < 0 ? 0.35 : 1;
-      const dmg = (0.055 * power * 10) / (defense * embarked + 4);
+      // One attacker hits one defender per hour: keep single exchanges meaningful
+      // so a battle resolves in hours, not weeks, without erasing whole brigades.
+      const dmg = (0.055 * power * 10) / (defense * embarked + 4) * 3.2;
       t.str -= dmg * (1 + this.mod(B, 'losses'));
-      t.org -= dmg * 2.6;
+      t.org -= dmg * 2.2;
       a.engaged = 0; t.engaged = 0;
       a.xp = Math.min(1, a.xp + 0.0015); t.xp = Math.min(1, t.xp + 0.001);
       casualties.set(t.owner, (casualties.get(t.owner) ?? 0) + dmg * tst.manpower * 0.01);
@@ -465,7 +539,7 @@ export class Sim {
       if (u.engaged < 3) continue;
       const c = this.c(u.owner)!;
       const sup = this.supply(u);
-      u.org = Math.min(100, u.org + 1.6 * sup * (1 + this.mod(c, 'org_regen')));
+      u.org = Math.min(100, u.org + (u.engaged < 6 ? 1.2 : 2.4) * sup * (1 + this.mod(c, 'org_regen')));
       if (sup >= 0.85 && u.str < 100 && c.manpower > 1 && c.budget > -c.gdp * 0.2) {
         const add = 0.12;
         u.str = Math.min(100, u.str + add);
@@ -508,13 +582,42 @@ export class Sim {
     }
   }
 
+  /** Ground pressure each side has in a province (used by the capture contest). */
+  private pressure(owner: string, p: number): number {
+    const pr = this.world.provinces[p];
+    let v = 0;
+    for (const u of this.near(pr.lat, pr.lon, 90, (e) => UNIT[e.type].domain === 'land' && e.owner === owner && e.type !== 'airdef')) {
+      // Full weight inside the province, half within neighbouring provinces.
+      const inside = this.world.provinceAt(u.lat, u.lon) === p;
+      v += (inside ? 1 : 0.35) * (u.type === 'armor' ? 1.4 : u.type === 'special' ? 0.8 : u.type === 'artillery' ? 0.5 : 1) * (u.str / 100) * (0.4 + u.org / 100);
+    }
+    return v;
+  }
+
+  /**
+   * Province capture is a contest, not a timer: the stronger side grinds the
+   * defender down. A lone unit can flip an undefended province; a defended
+   * front needs real superiority, and a beaten attacker is pushed back instead
+   * of flickering the province back and forth every few hours.
+   */
+  /** Capture log dedupe: a see-saw front must not flood the journal with the same message. */
+  private captureLog = new Map<number, { by: string; tick: number }>();
+  private logCapture(p: number, by: string, text: string, kind: LogEntry['kind'], owner?: string) {
+    const last = this.captureLog.get(p);
+    if (last && last.by === by && this.s.tick - last.tick < 24 * 10) return;
+    this.captureLog.set(p, { by, tick: this.s.tick });
+    this.log(text, kind, owner);
+  }
+
   private capture() {
     const P = this.s.prov;
+    /** attackers per province this hour (avoids several units double-ticking a province) */
+    const done = new Set<number>();
     for (const u of this.s.units) {
       if (u.type !== 'infantry' && u.type !== 'armor' && u.type !== 'special') continue;
-      if (u.org < 20) continue;
+      if (u.org < 12) continue;
       const p = this.world.provinceAt(u.lat, u.lon);
-      if (p < 0) continue;
+      if (p < 0 || done.has(p)) continue;
       const ctrl = P.ctrl[p];
       if (ctrl !== u.owner && ctrl !== '010' && !this.atWar(ctrl, u.owner) && !this.friendly(ctrl, u.owner)) {
         const cc = this.c(ctrl);
@@ -525,24 +628,49 @@ export class Sim {
           this.addGrudge(ctrl, u.owner, 1095);
         }
       }
-      if (ctrl === u.owner || !this.atWar(ctrl, u.owner)) {
-        // Liberation of allied land
-        if (P.owner[p] !== ctrl && this.friendly(P.owner[p], u.owner) && this.atWar(ctrl, u.owner) === false && this.atWar(P.owner[p], ctrl)) P.ctrl[p] = P.owner[p];
+      const ctrlNow = P.ctrl[p];
+      if (ctrlNow === u.owner || !this.atWar(ctrlNow, u.owner)) {
+        // Liberation of allied land.
+        if (P.owner[p] !== ctrlNow && this.friendly(P.owner[p], u.owner) && this.atWar(P.owner[p], ctrlNow)) { P.ctrl[p] = P.owner[p]; P.capture[p] = 0; P.captureBy[p] = null; }
         continue;
       }
-      if (this.near(u.lat, u.lon, 30, (e) => UNIT[e.type].domain === 'land' && e.type !== 'airdef' && this.atWar(e.owner, u.owner)).length) continue;
-      if (P.captureBy[p] !== u.owner) { P.captureBy[p] = u.owner; P.capture[p] = 0; }
-      const terr = TERRAIN_INFO[this.world.provinces[p].terrain].move;
-      P.capture[p] += (u.type === 'armor' ? 0.14 : u.type === 'special' ? 0.16 : 0.1) * terr * (this.world.provinces[p].light > 0.3 ? 0.6 : 1);
+      done.add(p);
+      // Liberation: a province occupied by an enemy goes back to its friends.
+      if (this.friendly(P.owner[p], u.owner) && P.owner[p] !== ctrlNow && !this.atWar(P.owner[p], u.owner)) {
+        P.ctrl[p] = P.owner[p]; P.capture[p] = 0; P.captureBy[p] = null;
+        this.fx.push({ k: 'capture', p, by: P.owner[p] });
+        continue;
+      }
+      const def = this.pressure(ctrlNow, p);
+      const atk = this.pressure(u.owner, p);
+      const pr = this.world.provinces[p];
+      const terr = TERRAIN_INFO[pr.terrain].move;
+      const urban = pr.light > 0.3 ? 0.6 : 1;
+      const fort = 1 + (P.buildings[p].bunker ?? 0) * 0.25;
+      // Net progress per hour: attacker volume vs defended ground.
+      const net = (atk - def * 0.75 * fort) / Math.max(2.5, 4 + def * 2) * terr * urban;
+      if (P.captureBy[p] !== u.owner) { P.captureBy[p] = u.owner; P.capture[p] = Math.max(0, P.capture[p] * 0.5); }
+      P.capture[p] = Math.max(0, Math.min(1, P.capture[p] + net));
+      if (net < 0) {
+        // Attack stalled: the lead unit takes the brunt and disengages.
+        u.org = Math.max(0, u.org - 6);
+        u.str = Math.max(1, u.str - 1.2);
+        if (u.org <= 6) { u.path = []; u.hold = false; if (!u.path.length) this.retreat(u); }
+      }
       if (P.capture[p] >= 1) {
         const owner = P.owner[p];
         const newCtrl = owner !== u.owner && this.friendly(owner, u.owner) ? owner : u.owner;
         P.ctrl[p] = newCtrl; P.capture[p] = 0; P.captureBy[p] = null;
         this.fx.push({ k: 'capture', p, by: newCtrl });
-        const pr = this.world.provinces[p];
-        if (pr.city && pr.city.pop > 0.25) this.log(newCtrl === owner ? `🏳 ${this.c(newCtrl)!.name} освобождает ${pr.name}` : `🚩 ${this.c(u.owner)!.name} занимает ${pr.name}`, 'war', owner);
+        if (pr.city && pr.city.pop > 0.25) this.logCapture(p, newCtrl, newCtrl === owner ? `🏳 ${this.c(newCtrl)!.name} освобождает ${pr.name}` : `🚩 ${this.c(u.owner)!.name} занимает ${pr.name}`, 'war', owner);
         if (p === this.c(owner)?.capital) this.log(`🏛 Пала столица — ${pr.name}!`, 'alert', owner);
       }
+    }
+    // Unopposed partial captures bleed away — the front does not freeze at 90%.
+    for (let p = 0; p < P.capture.length; p++) {
+      if (P.capture[p] <= 0 || done.has(p)) continue;
+      P.capture[p] = Math.max(0, P.capture[p] - 0.03);
+      if (P.capture[p] === 0) P.captureBy[p] = null;
     }
   }
 
@@ -558,7 +686,7 @@ export class Sim {
   }
 
   /** Pick launch site: own-controlled province nearest to the target. */
-  launchSite(c: CountryState, to: LL, type: MissileType): LL | null {
+  launchSite(c: CountryState, to: LL, type: MissileType): (LL & { km: number; range: number }) | null {
     const P = this.s.prov;
     let best: LL | null = null, bd = Infinity;
     const range = this.missileRange(c, type);
@@ -574,7 +702,7 @@ export class Sim {
         if (d < bd) { bd = d; best = { lat: u.lat, lon: u.lon }; }
       }
     }
-    return best && bd <= range ? best : null;
+    return best ? { ...best, km: bd, range } : null;
   }
 
   launch(owner: string, type: MissileType, to: LL, targetUnit: number | null = null, opts?: { actOfWar?: boolean }): Missile | string {
@@ -582,8 +710,10 @@ export class Sim {
     if (!c) return 'Нет страны';
     const err = this.canUseMissile(c, type);
     if (err) return err;
-    const from = this.launchSite(c, to, type);
-    if (!from) return 'Цель вне радиуса действия';
+    const site = this.launchSite(c, to, type);
+    if (!site) return 'Нет подходящей пусковой позиции';
+    if (site.km > site.range) return `Цель вне радиуса: ${Math.round(site.km)} км (дальность ${Math.round(site.range)} км)`;
+    const from = { lat: site.lat, lon: site.lon };
     c.missiles[type]--;
     if (type === 'icbm') c.nukes--;
     const st = MISSILE[type];

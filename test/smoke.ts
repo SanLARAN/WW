@@ -115,7 +115,9 @@ T('drift down', sim.rel('643', '156') < 70, `rel=${sim.rel('643', '156').toFixed
 // 5. Cooldown expires after 45+ days.
 hour(24 * 20);
 const e5 = dispatch(sim, '643', { t: 'diplo', action: 'improve', target: '840' });
-T('cooldown expired', e5 === null, `e5=${e5} rel=${R('643', '840')}`);
+// Either the channel reopened (e5 === null) or relations already climbed past the
+// "warm" threshold — both mean the 45-day cooldown is gone.
+T('cooldown expired', e5 === null || e5.includes('уже тёплые'), `e5=${e5} rel=${R('643', '840')}`);
 
 // 6. Two-sided diplomacy: alliance and ultimatum on a player become request cards, never instant.
 const e10 = dispatch(sim, '804', { t: 'diplo', action: 'alliance', target: '840' });

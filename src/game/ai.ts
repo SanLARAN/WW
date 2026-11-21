@@ -33,12 +33,22 @@ export function dailyAI(sim: Sim) {
 /** Operational AI for countries at war — every 6 hours. */
 export function hourlyAI(sim: Sim) {
   if (sim.s.tick % 6 !== 0) return;
+  // One pass over the army list instead of one per belligerent: with dozens of
+  // simultaneous wars the per-country filter was the single hottest loop.
+  const unitsByOwner = new Map<string, Unit[]>();
+  for (const u of sim.s.units) {
+    const list = unitsByOwner.get(u.owner);
+    if (list) list.push(u); else unitsByOwner.set(u.owner, [u]);
+  }
+  // Provinces controlled by each country, so frontier detection never has to
+  // rescan all ~3000 provinces for every country.
+  const provsByCtrl = sim.provsByCtrl();
   for (const c of Object.values(sim.s.countries)) {
     if (!c.alive || c.player) continue;
     const enemies = sim.enemiesOf(c.id);
     if (!enemies.length) continue;
-    military(sim, c, enemies);
-    if (sim.s.tick % 24 === 0) missiles(sim, c, enemies);
+    military(sim, c, enemies, unitsByOwner, provsByCtrl);
+    if (sim.s.tick % 24 === 0) missiles(sim, c, enemies, unitsByOwner);
   }
 }
 
@@ -50,8 +60,9 @@ function economy(sim: Sim, c: CountryState, diff: number) {
   if (!atWar && c.econ === 'war') c.econ = 'mixed';
   if (atWar && c.mobilisation < 0.4) c.mobilisation += 0.05;
   // Army size target: grows with tension and war.
-  const mine = sim.s.units.filter((u) => u.owner === c.id);
-  const base = Math.max(2, Math.round(Math.log10(c.gdp + 1) * 4 * (c.tier === 'S' ? 2 : c.tier === 'A' ? 1.5 : 1)));
+  const mine = sim.unitsOf(c.id);
+  const rank = tierRank(c.tier);
+  const base = Math.max(2, Math.round(Math.log10(c.gdp + 1) * 4 * (rank <= 1 ? 2 : rank === 2 ? 1.5 : 1)));
   const target = base * (1 + sim.s.tension / 150 + (atWar ? 0.6 : 0)) * diff;
   if (mine.length + c.queue.length >= target || c.queue.length > 6) return;
   const pick: UnitType = atWar
@@ -73,7 +84,7 @@ function research(sim: Sim, c: CountryState) {
 
 function focus(sim: Sim, c: CountryState) {
   if (c.focus) return;
-  const list = focusTree(c.id).filter((f) => !focusAvailable(c, f));
+  const list = focusTree(c.id).filter((f) => focusAvailable(c, f));
   if (!list.length) return;
   const f = list[Math.floor(sim.rng() * Math.min(2, list.length))];
   c.focus = { id: f.id, progress: 0 };
@@ -84,11 +95,11 @@ function diplomacy(sim: Sim, c: CountryState, diff: number) {
   // Help allies at war.
   for (const w of s.wars) {
     if (sim.sideOf(w, c.id)) continue;
+    // Join the side of an ally that is already fighting (both directions).
     for (const side of ['a', 'd'] as const) {
-      const leader = side === 'a' ? w.attackers[0] : w.defenders[0];
-      if (!leader) continue;
-      const allied = sim.militaryAllies(c.id).includes(leader);
-      if (allied && side === 'd' && sim.rel(c.id, leader) > 40 && sim.rng() < 0.15) sim.joinWar(c.id, w, side);
+      const members = side === 'a' ? w.attackers : w.defenders;
+      const leader = members.find((id) => sim.militaryAllies(c.id).includes(id) && sim.rel(c.id, id) > 40);
+      if (leader && sim.rng() < 0.15) { sim.joinWar(c.id, w, side); break; }
     }
   }
   // Call allies for help when the war is going badly.
@@ -101,11 +112,19 @@ function diplomacy(sim: Sim, c: CountryState, diff: number) {
     const r = sim.rel(c.id, o.id);
     if (r < -70 && c.gdp > 300 && c.econ === 'market' && !c.sanctions.includes(o.id) && sim.rng() < 0.05) applyCommand(sim, c.id, { t: 'diplo', action: 'sanction', target: o.id });
   }
-  // Peace when exhausted.
+  // Peace when exhausted or when the front has been frozen for months. Without
+  // this a stalemate between two AI states grinds on forever.
   for (const e of sim.enemiesOf(c.id)) {
-    if (c.warExhaustion > 60 && sim.rng() < 0.2) {
-      const E = sim.c(e)!;
-      if (!E.player && E.warExhaustion > 30) sim.makePeace(e, c.id, false);
+    const E = sim.c(e);
+    if (!E) continue;
+    const war = s.wars.find((w) => sim.sideOf(w, c.id) && sim.sideOf(w, E.id));
+    const years = war ? (s.tick - war.start) / (24 * 365) : 0;
+    const stale = war ? (s.tick - war.start) > 24 * 240 && Math.abs(sim.occupationShare(E.id, c.id) - sim.occupationShare(c.id, E.id)) < 0.08 : false;
+    if (E.player) continue;
+    if (c.warExhaustion > 60 && E.warExhaustion > 30 && sim.rng() < 0.2) sim.makePeace(e, c.id, false);
+    else if (stale && (c.warExhaustion > 25 || years > 1.2) && sim.rng() < 0.12) {
+      sim.makePeace(e, c.id, false);
+      sim.log(`🕊 ${c.name} и ${E.name}: фронт застыл, стороны идут на перемирие`, 'diplo');
     }
   }
   // Rare aggressive wars (not in historical mode — scripted there).
@@ -120,19 +139,28 @@ function diplomacy(sim: Sim, c: CountryState, diff: number) {
   if (target) sim.declareWar(c.id, target, sim.rel(c.id, target) < -80 ? 'provocation' : 'claims');
 }
 
-function military(sim: Sim, c: CountryState, enemies: string[]) {
+type UnitsByOwner = Map<string, Unit[]>;
+type ProvsByCtrl = Map<string, number[]>;
+
+function military(sim: Sim, c: CountryState, enemies: string[], unitsByOwner: UnitsByOwner, provsByCtrl: ProvsByCtrl) {
   const s = sim.s, w = sim.world, P = s.prov;
-  const mine = s.units.filter((u) => u.owner === c.id);
+  const mine = unitsByOwner.get(c.id) ?? [];
   const enemySet = new Set(enemies);
   // Frontier: enemy-controlled provinces adjacent to our controlled provinces.
   const frontier: number[] = [], ownFront: number[] = [];
-  for (let i = 0; i < P.ctrl.length; i++) {
-    if (P.ctrl[i] !== c.id && !sim.friendly(P.ctrl[i], c.id)) continue;
+  const own = provsByCtrl.get(c.id) ?? [];
+  for (const i of own) {
     let touches = false;
     for (const n of w.provinces[i].neighbors) if (enemySet.has(P.ctrl[n])) { frontier.push(n); touches = true; }
-    if (touches && P.ctrl[i] === c.id) ownFront.push(i);
+    if (touches) ownFront.push(i);
   }
-  const enemyUnits = s.units.filter((u) => enemySet.has(u.owner));
+  // Allied ground can also be the springboard for an offensive.
+  if (frontier.length < 2) {
+    for (const a of sim.militaryAllies(c.id)) for (const i of provsByCtrl.get(a) ?? []) {
+      for (const n of w.provinces[i].neighbors) if (enemySet.has(P.ctrl[n]) && !frontier.includes(n)) frontier.push(n);
+    }
+  }
+  const enemyUnits = enemies.flatMap((e) => unitsByOwner.get(e) ?? []);
   const idle = (u: Unit) => !u.path.length && u.engaged > 2 && !u.hold;
   let orders = 0;
   const go = (u: Unit, lat: number, lon: number) => { orders++; sim.orderMove(u, lat, lon); };
@@ -174,10 +202,9 @@ function military(sim: Sim, c: CountryState, enemies: string[]) {
   }
 }
 
-function missiles(sim: Sim, c: CountryState, enemies: string[]) {
+function missiles(sim: Sim, c: CountryState, enemies: string[], unitsByOwner: UnitsByOwner) {
   const s = sim.s;
-  const enemySet = new Set(enemies);
-  const targets = s.units.filter((u) => enemySet.has(u.owner) && UNIT[u.type].domain !== 'air');
+  const targets = enemies.flatMap((e) => unitsByOwner.get(e) ?? []).filter((u) => UNIT[u.type].domain !== 'air');
   const order: MissileType[] = ['shahed', 'cruise', 'ballistic', 'hypersonic'];
   for (const type of order) {
     if (c.missiles[type] <= 0 || sim.rng() > 0.45) continue;

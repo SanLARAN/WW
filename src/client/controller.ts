@@ -534,6 +534,8 @@ export class Controller {
     };
     window.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+      // WASD / QE pan and zoom the camera — never let them type into browser shortcuts.
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
       if (!this.sim || !this.me) return;
       if (e.code === 'Space') { e.preventDefault(); this.dispatch({ t: 'speed', speed: this.sim.s.speed ? 0 : 2 }); }
       else if (e.key >= '1' && e.key <= '5' && !e.ctrlKey) this.dispatch({ t: 'speed', speed: +e.key });

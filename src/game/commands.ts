@@ -317,10 +317,27 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
       }
       const score = taken / Math.max(1e-6, theirs) - lost / Math.max(1e-6, mine);
       const weary = T.warExhaustion / 100;
-      const accept = T.player ? false : action === 'peace' ? score + weary > -0.05 || sim.rng() < 0.15 : score + weary > 0.35;
-      if (T.player) { sim.log(`🕊 ${c.name} предлагает вам ${action === 'peace' ? 'белый мир' : 'капитуляцию'} — откройте «Дипломатию», чтобы ответить`, 'diplo', target); T.flags.push(`peaceoffer_${c.id}_${action}`); return null; }
+      const war = sim.s.wars.find((w) => sim.sideOf(w, c.id) && sim.sideOf(w, target));
+      const months = war ? (sim.s.tick - war.start) / (24 * 30) : 0;
+      // Nobody fights forever: exhaustion, a frozen front or a long war all make
+      // a white peace attractive. Annexation still needs a real military win.
+      const stalemate = months > 6 && Math.abs(score) < 0.1;
+      const accept = T.player ? false
+        : action === 'peace'
+          ? score > -0.05 || weary > 0.15 || stalemate || months > 15 || sim.rng() < 0.15
+          : score > 0.35 || (score > 0.15 && weary > 0.4);
+      if (T.player) {
+        const flag = `peaceoffer_${c.id}_${action}`;
+        if (!T.flags.includes(flag)) {
+          T.flags.push(flag);
+          sim.log(`🕊 ${c.name} предлагает вам ${action === 'peace' ? 'белый мир' : 'капитуляцию'} — откройте «Дипломатию», чтобы ответить`, 'diplo', target);
+        }
+        return null;
+      }
       if (!accept) return `${T.name} отвергает предложение`;
       sim.makePeace(c.id, target, action === 'peaceAnnex');
+      const rest = sim.enemiesOf(c.id).filter((e) => !sim.c(e)?.player);
+      if (rest.length) for (const e of rest) if (sim.rng() < 0.5) sim.makePeace(c.id, e, false);
       return null;
     }
     case 'callAllies': {
