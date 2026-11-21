@@ -68,10 +68,10 @@ export function buildSky(renderer: THREE.WebGLRenderer): { mesh: THREE.Mesh; fog
         // cool bounce from the ground plane
         col = mix(col, vec3(0.42, 0.42, 0.40), smoothstep(0.05, -0.2, d.y) * 0.5);
 
-        // filmic-ish shoulder so the bright parts roll off instead of clipping
+        // Keep this linear: the composer's OutputPass applies ACES and sRGB at the
+        // very end, so doing gamma here would double-count it and bleach the sky.
         col = col / (col + vec3(0.85));
-        col = pow(col, vec3(1.0 / 2.2));
-        gl_FragColor = vec4(col * 1.22, 1.0);
+        gl_FragColor = vec4(col * 1.55, 1.0);
       }
     `,
   });

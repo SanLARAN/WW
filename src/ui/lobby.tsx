@@ -24,6 +24,8 @@ export function Lobby(props: {
   setSettings: (s: LobbySettings) => void;
   onStart: () => void;
   onCutscene: () => void;
+  onHost: () => void;
+  onJoin: () => void;
   netStatus: string;
   peers: string[];
 }): JSX.Element {
@@ -133,7 +135,9 @@ export function Lobby(props: {
                   </div>
                 )}
               </div>
-              <button class="btn primary" style={{ marginTop: 6 }} onClick={props.onStart}>Начать бой</button>
+              <button class="btn primary" style={{ marginTop: 6 }} onClick={props.onStart}>
+                {props.netStatus.includes('открыта') ? 'Начать бой · ждём отряд' : 'Начать бой'}
+              </button>
               <button class="btn" style={{ marginTop: 10 }} onClick={props.onCutscene}>Смотреть вступление</button>
             </div>
           </div>
@@ -153,13 +157,18 @@ export function Lobby(props: {
                   />
                   <button
                     class="btn small"
-                    onClick={() => setSettings({ ...settings, host: true, roomCode: settings.roomCode || randomCode() })}
+                    onClick={() => {
+                      const code = /^[A-Z0-9]{4,6}$/.test(settings.roomCode) ? settings.roomCode : randomCode();
+                      setSettings({ ...settings, host: true, roomCode: code });
+                      props.onHost();
+                    }}
                   >
                     Создать
                   </button>
                   <button
                     class="btn small"
-                    onClick={() => setSettings({ ...settings, host: false })}
+                    disabled={settings.roomCode.length < 4}
+                    onClick={() => { setSettings({ ...settings, host: false }); props.onJoin(); }}
                   >
                     Войти
                   </button>

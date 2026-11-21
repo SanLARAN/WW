@@ -94,6 +94,8 @@ export interface SoldierState {
   /** accumulated recoil 0..1.6 — drives the spread and the camera kick */
   recoil: number;
   lastShotPrev: number;
+  /** self-aid charges: a solo trooper can pick himself up once per run */
+  selfAid: number;
   /** last input sequence applied (for client-side reconciliation) */
   lastSeq: number;
   /** network interpolation buffer position for remote copies */

@@ -37,6 +37,7 @@ export class InputState {
       this.buttons.clear();
     });
     el.addEventListener('mousedown', (ev) => {
+      if (!this.locked) this.lock();
       this.buttons.add((ev as MouseEvent).button);
     });
     addEventListener('mouseup', (ev) => this.buttons.delete((ev as MouseEvent).button));
@@ -55,7 +56,12 @@ export class InputState {
   }
 
   lock() {
-    void this.el.requestPointerLock?.();
+    try {
+      const r = this.el.requestPointerLock?.() as unknown as Promise<void> | undefined;
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    } catch {
+      /* browsers require a fresh gesture; the canvas click handler covers that */
+    }
   }
 
   unlock() {

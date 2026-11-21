@@ -23,6 +23,7 @@ export type NetMessage =
   | { t: 'input'; cmd: InputCmd }
   | { t: 'snap'; s: GameState; ack: Record<number, number> }
   | { t: 'event'; kind: string; data?: unknown }
+  | { t: 'youAre'; soldier: number }
   | { t: 'bye' };
 
 const PREFIX = 'kotel-';
@@ -37,6 +38,8 @@ export interface NetCallbacks {
   onRemoteInput: (peer: string, cmd: InputCmd) => void;
   /** host only: a peer connected and was assigned a squad slot */
   onPeerJoined: (peer: string, name: string, slot: number) => void;
+  /** client: the host told us which soldier we own */
+  onYouAre: (soldierId: number) => void;
 }
 
 export class Net {
@@ -138,6 +141,10 @@ export class Net {
       case 'event':
         this.cb.onEvent(m.kind, m.data);
         break;
+      case 'youAre':
+        this.myId = m.soldier;
+        this.cb.onYouAre(m.soldier);
+        break;
       default:
         break;
     }
@@ -149,6 +156,11 @@ export class Net {
 
   broadcast(m: NetMessage) {
     for (const c of this.conns) this.send(c, m);
+  }
+
+  sendTo(peer: string, m: NetMessage) {
+    const c = this.conns.find((x) => x.peer === peer);
+    if (c) this.send(c, m);
   }
 
   /** Client → host: the only traffic a client originates during a match. */

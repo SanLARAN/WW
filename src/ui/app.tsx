@@ -74,6 +74,7 @@ export function App(): JSX.Element {
         host: opts?.host ?? true,
       }, {
         onState: (st) => {
+          if (!(opts?.host ?? true) && matchRef.current) matchRef.current.adopt(st);
           gameState.set(st);
           if (matchRef.current) setAds(matchRef.current.controller.adsAmount);
         },
@@ -128,23 +129,26 @@ export function App(): JSX.Element {
     return () => removeEventListener('keydown', onKey);
   }, [paused]);
 
-  const connectNet = (host: boolean) => {
+  const connectNet = (host: boolean, code?: string, seed?: number, bots?: number, difficulty?: number) => {
     const net = new Net({
-      onState: () => {},
+      onState: (st) => gameState.set(st),
       onPeers: (list) => setPeers(list.map((p) => p.name)),
       onStatus: setNetStatus,
       onWelcome: (m) => {
         setSettings((s2) => ({ ...s2, seed: m.seed, bots: m.bots, difficulty: m.difficulty }));
         startMatch({ seed: m.seed, bots: m.bots, difficulty: m.difficulty, net, host: false });
       },
-      onEvent: () => {},
+      onEvent: (kind, data) => matchRef.current?.remoteEvent(kind, data),
       onRemoteInput: () => {},
       onPeerJoined: () => {},
+      onYouAre: () => {},
     });
     netRef.current = net;
-    if (host) net.host(settings.roomCode || randomCode(), settings.seed, settings.bots, settings.difficulty);
+    if (host) net.host(code ?? settings.roomCode ?? randomCode(), seed ?? settings.seed, bots ?? settings.bots, difficulty ?? settings.difficulty);
     else net.join(settings.roomCode, name, profile.xp, profileLevel(profile));
   };
+
+  const joinCode = () => { connectNet(false); };
 
   const me = useMemo(() => {
     if (!s || !matchRef.current?.me) return null;
@@ -165,8 +169,18 @@ export function App(): JSX.Element {
           setProfile={(p) => { setProfile(p); }}
           settings={{ ...settings, sensitivity: settings.sensitivity }}
           setSettings={(v) => { setSettings(v); setProfile((p) => ({ ...p, sensitivity: v.sensitivity })); }}
-          onStart={() => startMatch()}
+          onStart={() => {
+            const net = netRef.current;
+            const hosting = !!net && net.role === 'host';
+            startMatch({ net: hosting ? net : null, host: true });
+          }}
           onCutscene={() => setScreen('cutscene')}
+          onHost={() => {
+            const code = settings.roomCode || randomCode();
+            setSettings((s2) => ({ ...s2, roomCode: code, host: true }));
+            connectNet(true, code);
+          }}
+          onJoin={joinCode}
           netStatus={netStatus}
           peers={peers}
         />
@@ -187,8 +201,7 @@ export function App(): JSX.Element {
           <button class="btn small" onClick={() => { setMuted((m) => !m); audioRef.current.setMuted(!muted); }}>
             {muted ? 'звук выкл' : 'звук вкл'}
           </button>
-          <button class="btn small" onClick={() => connectNet(true)}>Хостить</button>
-          <button class="btn small" onClick={() => connectNet(false)} disabled={!settings.roomCode}>Войти по коду</button>
+          <span class="muted" style={{ fontSize: 10 }}>позывной в отряде</span>
         </div>
       )}
 

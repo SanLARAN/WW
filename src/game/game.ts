@@ -12,7 +12,7 @@ import { InputState } from './input';
 import { AudioEngine } from './audio';
 import type { Profile } from '../core/profile';
 import { ownedMod, saveProfile } from '../core/profile';
-import { levelOf, WEAPONS, BODY, type Perk } from '../sim/weapons';
+import { levelOf, WEAPONS, type Perk } from '../sim/weapons';
 import { perksOf } from '../sim/weapons';
 import type { Net } from '../net/net';
 
@@ -74,12 +74,12 @@ export class Match {
   private shellTimer = 40;
   private lastEventIdx = 0;
   private sensitivity = 1;
-  private startTime = performance.now();
   private disposal: Array<() => void> = [];
   private perks: Perk[] = [];
   /** host: player soldier id by peer id */
   private remoteIds = new Map<string, number>();
   private remoteInput = new Map<string, InputCmd>();
+  private lastTracerCount = 0;
 
   constructor(canvas: HTMLCanvasElement, cfg: MatchConfig, hooks: MatchHooks) {
     this.cfg = cfg;
@@ -144,12 +144,14 @@ export class Match {
       if (this.remoteIds.has(_peer)) return;
       const sol = this.sim.addSoldier(name || 'Боец', false, slot + 1);
       this.remoteIds.set(_peer, sol.id);
+      net.sendTo(_peer, { t: 'youAre', soldier: sol.id });
       this.hooks.onKill(`<b>${name.toUpperCase()}</b> на связи`);
     };
     net.cbRef.current.onRemoteInput = (peer, cmd) => {
       if (!this.remoteIds.has(peer)) this.remoteIds.set(peer, 0);
       this.remoteInput.set(peer, cmd);
     };
+    net.cbRef.current.onYouAre = () => {};
     net.cbRef.current.onEvent = (kind, data) => {
       if (kind === 'peer-left' && typeof data === 'string') {
         const id = this.remoteIds.get(data);
@@ -160,6 +162,43 @@ export class Match {
         this.remoteIds.delete(data);
       }
     };
+  }
+
+  /** Host → clients: the feedback they cannot derive from snapshots. */
+  private broadcastEvent(kind: string, data?: unknown) {
+    if (this.cfg.net && this.cfg.host) this.cfg.net.broadcast({ t: 'event', kind, data });
+  }
+
+  /** Client: a host event arrived. */
+  remoteEvent(kind: string, data?: unknown) {
+    const a = data as Record<string, unknown> | undefined;
+    if (kind === 'hit') this.hooks.onHitmark();
+    if (kind === 'enemyKill' && a) {
+      const label = a.kind === 'armor' ? 'БРОНЕМАШИНА' : a.kind === 'drone' ? 'ДРОН' : a.kind === 'fpv' ? 'FPV-ДРОН' : 'ПЕХОТА';
+      this.hooks.onKill(`<b>${label}</b> уничтожен`);
+    }
+    if (kind === 'wave' && a && 'name' in a) this.hooks.onBanner(String(a.name), `волна ${a.index}`, 4200);
+    if (kind === 'wave' && a && 'revive' in a && a.revive === this.me?.id) this.hooks.onBanner('НА СВЯЗИ', 'свои вытащили', 2600);
+    if (kind === 'drop') this.hooks.onBanner('СБРОС', 'ящик снабжения в квадрате', 4200);
+  }
+
+  /** Client: take the host's world, keep our own predicted pose. */
+  adopt(s: GameState) {
+    if (this.cfg.host) return;
+    const before = this.lastTracerCount;
+    this.lastTracerCount = s.tracers.length;
+    if (s.tracers.length > before) {
+      // someone fired; the pan follows the tracer's origin relative to us
+      const t = s.tracers[s.tracers.length - 1];
+      const dx = t.from.x - (this.me?.x ?? 0);
+      const dz = t.from.z - (this.me?.z ?? 0);
+      const d = Math.hypot(dx, dz);
+      if (d > 3) this.audio.shot('ak', d, Math.max(-1, Math.min(1, dx / Math.max(6, d) * 0.6)));
+    }
+    this.sim.adoptSnapshot(s, this.cfg.net?.myId ?? this.me?.id ?? -1);
+    const mine = this.sim.soldier(this.cfg.net?.myId ?? -1);
+    if (mine && mine.id !== this.me?.id) this.me = mine;
+    if (mine) this.me = mine;
   }
 
   setSensitivity(v: number) { this.sensitivity = v; }
@@ -227,8 +266,11 @@ export class Match {
     }
 
     if (this.cfg.net && !this.cfg.host) {
-      // client: the host is the one that steps the world
+      // client: the host owns the world. The local soldier is predicted by
+      // applyInput alone (movement is deterministic and collision is static), so
+      // walking never waits on a round trip.
       this.cfg.net.sendInput(cmd);
+      if (this.me) this.sim.applyInputForClient(this.me, cmd);
       return;
     }
 
@@ -246,14 +288,23 @@ export class Match {
     for (const ev of newEvents) {
       const a = ev.a as Record<string, unknown> | undefined;
       if (ev.type === 'shot' && a) {
-        const dist = Math.hypot((a.x as number) - this.me!.x, (a.z as number) - this.me!.z);
-        this.audio.shot((a.weapon as 'ak') ?? 'ak', dist, 0);
+        // Shot events are global (bots, peers, host) — only play the ones that
+        // are not mine, otherwise the local trigger doubles every round.
+        if (a.id !== this.me?.id) {
+          const dx = (a.x as number) - this.me!.x;
+          const dz = (a.z as number) - this.me!.z;
+          const dist = Math.hypot(dx, dz);
+          const pan = Math.max(-1, Math.min(1, dx / Math.max(6, dist) * 0.6));
+          this.audio.shot((a.weapon as 'ak') ?? 'ak', dist, pan);
+        }
       }
       if (ev.type === 'hit') {
+        this.broadcastEvent('hit');
         this.hooks.onHitmark();
         this.audio.impact(0.2);
       }
       if (ev.type === 'enemyKill') {
+        this.broadcastEvent('enemyKill', a);
         const kind = a?.kind as string;
         const label = kind === 'armor' ? 'БРОНЕМАШИНА' : kind === 'drone' ? 'ДРОН' : kind === 'fpv' ? 'FPV-ДРОН' : 'ПЕХОТА';
         this.hooks.onKill(`<b>${label}</b> уничтожен`);
@@ -262,6 +313,7 @@ export class Match {
         this.audio.explosion(4);
       }
       if (ev.type === 'wave' && a) {
+        this.broadcastEvent('wave', a);
         if ('name' in a) this.hooks.onBanner(String(a.name), `волна ${a.index}`, 4200);
         if ('levelUp' in a && a.id === this.me?.id) {
           this.hooks.onBanner(`УРОВЕНЬ ${a.levelUp}`, 'навык закреплён', 3200);
@@ -275,6 +327,7 @@ export class Match {
         this.audio.ui('open');
       }
       if (ev.type === 'drop') {
+        this.broadcastEvent('drop');
         this.hooks.onBanner('СБРОС', 'ящик снабжения в квадрате', 4200);
       }
     }
@@ -421,8 +474,7 @@ export class Match {
     for (const d of this.disposal) d();
     this.disposal = [];
     this.input.unlock();
-    this.engine.renderer.dispose();
-    void this.startTime;
-    void BODY;
+    this.engine.dispose();
+    this.audio.stopAll();
   }
 }

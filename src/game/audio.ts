@@ -13,12 +13,18 @@ export class AudioEngine {
   private bus!: DynamicsCompressorNode;
   private noise!: AudioBuffer;
   private wind?: { gain: GainNode; filter: BiquadFilterNode };
+  private windSource?: AudioBufferSourceNode;
   private started = false;
   muted = false;
 
   /** Must be called from a user gesture. */
   start() {
-    if (this.started) return;
+    if (this.started) {
+      // coming back from a match: just bring the beds up again
+      try { this.wind?.gain.gain.setTargetAtTime(0.07, this.ctx!.currentTime, 0.2); } catch { /* noop */ }
+      void this.ctx?.resume();
+      return;
+    }
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new Ctx();
     this.master = this.ctx.createGain();
@@ -39,6 +45,7 @@ export class AudioEngine {
 
     this.startWind();
     this.started = true;
+    void this.windSource;
   }
 
   resume() {
@@ -71,6 +78,7 @@ export class AudioEngine {
     lfo.connect(lfoGain).connect(gain.gain);
     lfo.start();
     this.wind = { gain, filter };
+    this.windSource = src;
   }
 
   /** Distance attenuation + a low-pass that eats the high frequencies with range. */
@@ -239,6 +247,13 @@ export class AudioEngine {
       osc.connect(env).connect(this.master);
       osc.start(t + off); osc.stop(t + off + 0.24);
     }
+  }
+
+  /** Stop the ambient beds (match teardown). Keeps the context for the next run. */
+  stopAll() {
+    try {
+      this.wind?.gain.gain.setTargetAtTime(0, this.ctx?.currentTime ?? 0, 0.1);
+    } catch { /* context already closed */ }
   }
 
   /** Wind picks up with the pressure of the fight. */

@@ -126,7 +126,7 @@ export class Engine {
 
           // fine grain, animated — hides banding in the grey sky
           float g = hash(uv * uResolution + fract(uTime) * 91.7) - 0.5;
-          col += g * 0.021;
+          col += g * 0.006;
 
           col = mix(col, vec3(0.0), clamp(uFade, 0.0, 1.0));
           gl_FragColor = vec4(col, 1.0);
@@ -136,7 +136,25 @@ export class Engine {
     this.composer.addPass(this.grade);
     this.composer.addPass(new OutputPass());
 
-    addEventListener('resize', () => this.resize());
+    this.onResize = () => this.resize();
+    addEventListener('resize', this.onResize);
+  }
+
+  private onResize: () => void;
+
+  dispose() {
+    removeEventListener('resize', this.onResize);
+    this.composer.dispose();
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.geometry?.dispose?.();
+        const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+        if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+        else mat?.dispose?.();
+      }
+    });
+    this.renderer.dispose();
   }
 
   resize() {

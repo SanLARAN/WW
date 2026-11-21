@@ -62,6 +62,7 @@ export class Sim {
       stamina: 100, crouch: false, sprint: false,
       weapon: 'ak', reserve: ['shotgun', 'sniper', 'lmg'], ammo: WEAPONS.ak.mag, magSize: WEAPONS.ak.mag,
       reloadingUntil: 0, lastShot: -9999, ads: false,
+      selfAid: bot ? 0 : 1,
       xp, level: lvl, kills: 0, score: 0, suppress: 0, recoil: 0, lastShotPrev: -9999, lastSeq: 0,
       netX: st.x, netY: 0, netZ: st.z,
     };
@@ -109,7 +110,8 @@ export class Sim {
     this.updateEnemies(TICK);
     this.updateSupply(TICK);
     this.cullEffects(TICK);
-    if (this.s.phase === 'fight' && this.s.survived > 20 && this.s.soldiers.length && this.aliveSoldiers().length === 0) {
+    const revivable = this.s.soldiers.some((x) => !x.alive && !x.bot && x.selfAid > 0 && (this.s.time - x.downedAt) / 1000 < 22);
+    if (this.s.phase === 'fight' && this.s.survived > 20 && this.s.soldiers.length && this.aliveSoldiers().length === 0 && !revivable) {
       this.s.phase = 'overrun';
       this.s.wave.active = false;
       this.events.push({ type: 'wave', a: { overrun: true } });
@@ -130,7 +132,8 @@ export class Sim {
       if (downFor < 3) continue;
       const helpers = this.aliveSoldiers().filter((h) => h.id !== sol.id && Math.hypot(h.x - sol.x, h.z - sol.z) < 6);
       const solo = this.aliveSoldiers().length === 0 && downFor > 20 && !sol.bot;
-      if (helpers.length || solo) {
+      if (helpers.length || (solo && sol.selfAid > 0)) {
+        if (!helpers.length) sol.selfAid--;
         sol.alive = true;
         sol.hp = Math.max(35, sol.maxHp * 0.4);
         sol.suppress = 0;
@@ -160,6 +163,24 @@ export class Sim {
     if (cmd.reload) this.startReload(sol);
     if (cmd.use) this.useBandage(sol);
     if (cmd.fire) this.tryFire(sol);
+  }
+
+  /** Client-side prediction: movement only, the host owns everything else. */
+  applyInputForClient(sol: SoldierState, cmd: InputCmd) {
+    this.applyInput(sol, { ...cmd, fire: false, reload: false, use: false });
+    this.moveSoldier(sol, TICK);
+    this.regen(sol);
+  }
+
+  /** Client: adopt a host snapshot but keep the local soldier's predicted pose. */
+  adoptSnapshot(remote: GameState, myId: number) {
+    const mine = this.soldier(myId);
+    const predicted = mine ? { x: mine.x, z: mine.z, vx: mine.vx, vz: mine.vz } : null;
+    this.s = remote;
+    if (predicted) {
+      const own = this.s.soldiers.find((x) => x.id === myId);
+      if (own) { own.x = predicted.x; own.z = predicted.z; own.vx = predicted.vx; own.vz = predicted.vz; }
+    }
   }
 
   private moveSoldier(sol: SoldierState, dt: number) {
@@ -294,7 +315,7 @@ export class Sim {
       sol.reserve = sol.reserve.filter((r) => r !== 'drone');
       this.swapWeapon(sol, sol.weapon === 'ak' ? 'shotgun' : sol.weapon);
     }
-    this.events.push({ type: 'shot', a: { weapon: w.id, x: sol.x, z: sol.z } });
+    this.events.push({ type: 'shot', a: { weapon: w.id, x: sol.x, z: sol.z, id: sol.id } });
   }
 
   private spreadOf(sol: SoldierState, base: number): number {
