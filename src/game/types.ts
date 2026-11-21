@@ -79,6 +79,11 @@ export interface CountryState {
   opinion: number; // world opinion -100..100
   aggression: number;
   modifiers: Record<string, number>; // temporary effects: key -> value
+  // Strategic layer (see game/strategy.ts) — all plain data so state stays serialisable.
+  doctrine: string; // chosen doctrine id, '' until picked
+  doctrinePaid: number; // tick of the next allowed switch
+  unlockPoints: number; // modernisation points
+  unlocks: string[]; // purchased upgrade ids
   flags: string[];
   quarantine: 'none' | 'soft' | 'hard';
 }

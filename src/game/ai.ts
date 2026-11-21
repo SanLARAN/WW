@@ -24,6 +24,7 @@ export function dailyAI(sim: Sim) {
     const slot = (hashString(c.id) + Math.floor(s.tick / 24)) % 5;
     economy(sim, c, diff);
     if (slot !== 0) continue;
+    doctrine(sim, c);
     research(sim, c);
     focus(sim, c);
     diplomacy(sim, c, diff);
@@ -71,6 +72,17 @@ function economy(sim: Sim, c: CountryState, diff: number) {
   if (c.budget > UNIT[pick].cost * 3) applyCommand(sim, c.id, { t: 'buildUnit', unit: pick, count: 1 });
   if (c.budget > 5 && c.missiles.cruise < 50 && c.tech >= 5) applyCommand(sim, c.id, { t: 'buildMissile', missile: 'cruise', count: 10 });
   if (c.id === '364' && c.budget > 1) applyCommand(sim, c.id, { t: 'buildMissile', missile: 'shahed', count: 50 });
+}
+
+/** AI picks a doctrine matching its temper — one AI card shows it to the player. */
+function doctrine(sim: Sim, c: CountryState) {
+  if (c.doctrine) return;
+  const pick = c.aggression > 0.55 ? 'blitz'
+    : c.tech >= 7 ? 'tech'
+    : sim.inWar(c.id) ? 'fortress'
+    : c.gdp > 800 ? 'economy'
+    : 'attrition';
+  applyCommand(sim, c.id, { t: 'doctrine', id: pick });
 }
 
 function research(sim: Sim, c: CountryState) {
@@ -179,7 +191,7 @@ function military(sim: Sim, c: CountryState, enemies: string[], unitsByOwner: Un
       if (e) go(u, e.lat + (sim.rng() - 0.5) * 0.2, e.lon + (sim.rng() - 0.5) * 0.2);
       continue;
     }
-    if (u.org < 55 || u.str < 45) continue;
+    if (c.doctrine !== 'blitz' && c.doctrine !== 'fortress' && (u.org < 55 || u.str < 45)) continue;
     if (!frontier.length) {
       // No land border: try amphibious toward nearest enemy province.
       const target = nearestProvince(sim, u, (i) => enemySet.has(P.ctrl[i]), 4000);
@@ -197,6 +209,16 @@ function military(sim: Sim, c: CountryState, enemies: string[], unitsByOwner: Un
       if (own >= 0 && distKm(u.lat, u.lon, w.provinces[own].lat, w.provinces[own].lon) > 30) go(u, w.provinces[own].lat, w.provinces[own].lon);
       continue;
     }
+    // Doctrine-driven behaviour: a "fortress" AI digs in instead of attacking,
+    // a "blitz" AI pushes even at low readiness. This is what makes the player's
+    // doctrine choice readable on the map.
+    if (c.doctrine === 'fortress' && ownFront.length) {
+      const own = pickNear(sim, u, ownFront);
+      if (own >= 0) { if (distKm(u.lat, u.lon, w.provinces[own].lat, w.provinces[own].lon) < 45) u.hold = true; else go(u, w.provinces[own].lat, w.provinces[own].lon); }
+      continue;
+    }
+    if (c.doctrine === 'blitz' && (u.org < 35 || u.str < 30)) continue;
+    if (c.doctrine !== 'blitz' && (u.org < 55 || u.str < 45)) continue;
     const t = pickNear(sim, u, frontier);
     if (t >= 0) go(u, w.provinces[t].lat + (sim.rng() - 0.5) * 0.2, w.provinces[t].lon + (sim.rng() - 0.5) * 0.2);
   }

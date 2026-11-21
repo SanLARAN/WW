@@ -10,10 +10,11 @@ import { ProductionPanel, ArmyPanel, MissilesPanel } from './military';
 import { ResearchPanel, FocusPanel } from './science';
 import { DiplomacyPanel } from './diplomacy';
 import { SettingsBody } from './settings';
+import { OpsPanel } from './ops';
 
 const TITLES: Record<Exclude<Panel, null>, string> = {
   overview: 'Обзор страны', economy: 'Экономика', production: 'Производство', research: 'Технологии', focus: 'Национальные фокусы',
-  diplomacy: 'Дипломатия', army: 'Вооружённые силы', missiles: 'Ракетные войска', politics: 'Внутренняя политика', log: 'Журнал событий', settings: 'Настройки',
+  diplomacy: 'Дипломатия', army: 'Вооружённые силы', missiles: 'Ракетные войска', politics: 'Внутренняя политика', ops: 'Командование', log: 'Журнал событий', settings: 'Настройки',
 };
 
 export function PanelHost({ panel }: { panel: Exclude<Panel, null> }) {
@@ -21,7 +22,7 @@ export function PanelHost({ panel }: { panel: Exclude<Panel, null> }) {
   const body: Record<Exclude<Panel, null>, () => ComponentChildren> = {
     overview: () => <Overview />, economy: () => <Economy />, production: () => <ProductionPanel />, research: () => <ResearchPanel />,
     focus: () => <FocusPanel />, diplomacy: () => <DiplomacyPanel />, army: () => <ArmyPanel />, missiles: () => <MissilesPanel />,
-    politics: () => <Politics />, log: () => <Log />, settings: () => <SettingsBody inGame />,
+    politics: () => <Politics />, ops: () => <OpsPanel />, log: () => <Log />, settings: () => <SettingsBody inGame />,
   };
   return (
     <section class={`panel main-panel${wide ? ' wide' : ''}`} aria-label={TITLES[panel]}>

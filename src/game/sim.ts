@@ -474,7 +474,7 @@ export class Sim {
     }
   }
 
-  private hostile(a: Unit, b: Unit) { return a.owner !== b.owner && this.atWar(a.owner, b.owner); }
+  hostile(a: Unit, b: Unit) { return a.owner !== b.owner && this.atWar(a.owner, b.owner); }
 
   private combat() {
     const casualties = new Map<string, number>();
@@ -536,6 +536,9 @@ export class Sim {
     }
     // Recovery
     for (const u of this.s.units) {
+      // Digging in: a land unit standing still for a full day entrenches itself.
+      // This is the trade-off that makes "hold" a real decision on the map.
+      if (u.hold && u.engaged >= 6 && UNIT[u.type].domain === 'land' && u.org < 99) u.org = Math.min(100, u.org + 0.5);
       if (u.engaged < 3) continue;
       const c = this.c(u.owner)!;
       const sup = this.supply(u);

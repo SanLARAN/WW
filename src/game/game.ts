@@ -3,7 +3,7 @@ import { Sim } from './sim';
 import { dailyDomestic } from './domestic';
 import { dailyEvents } from './events';
 import { dailyAI, hourlyAI } from './ai';
-import { applyCommand, type Command } from './commands';
+import { applyCommand, autoUnlock, type Command } from './commands';
 import type { GameState } from './types';
 
 /** Relations decay toward a baseline set by treaties and grudges — bought friendship fades. */
@@ -30,6 +30,24 @@ function dailyRelations(sim: Sim) {
   }
 }
 
+/** Strategic layer upkeep: modernisation points, doctrine for the AI, unlock spending. */
+export function dailyStrategy(sim: Sim) {
+  const s = sim.s;
+  for (const c of Object.values(s.countries)) {
+    if (!c.alive) continue;
+    // Points accrue from factories + capital labs, so industry pays twice.
+    let mil = 0, labs = 0;
+    for (const p of sim.provsByCtrl().get(c.id) ?? []) {
+      mil += s.prov.buildings[p].milfactory ?? 0;
+      labs += s.prov.buildings[p].lab ?? 0;
+    }
+    const gain = mil + (labs >= 4 ? 1 : 0);
+    if (gain && s.tick % (24 * 10) === 0) c.unlockPoints = Math.min(12, c.unlockPoints + (gain >= 3 ? 1 : 0) + (s.tick % (24 * 30) === 0 ? 1 : 0));
+    if (c.modifiers.ops_bonus === undefined) c.modifiers.ops_bonus = 0;
+  }
+  autoUnlock(sim);
+}
+
 /** Authoritative game: simulation + all subsystems wired together. */
 export function createSim(world: World, state: GameState): Sim {
   const sim = new Sim(world, state);
@@ -37,6 +55,7 @@ export function createSim(world: World, state: GameState): Sim {
   sim.onDaily(dailyDomestic);
   sim.onDaily(dailyEvents);
   sim.onDaily(dailyAI);
+  sim.onDaily(dailyStrategy);
   sim.onHourly(hourlyAI);
   return sim;
 }

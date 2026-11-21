@@ -17,7 +17,7 @@ import { countryDefs } from '../data/countries';
 import type { Session } from '../net/session';
 
 export type MapMode = 'political' | 'terrain' | 'diplomacy' | 'economy' | 'military' | 'airdefense' | 'resources' | 'threat';
-export type Panel = null | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'log' | 'settings';
+export type Panel = null | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'ops' | 'log' | 'settings';
 
 export interface Toast { id: number; text: string; kind: LogEntry['kind'] | 'error' | 'ok'; t: number }
 
@@ -52,6 +52,11 @@ export class Controller {
   hoverProvince = -1;
   hoverPos: { x: number; y: number } | null = null;
   targeting: { missile: MissileType; count: number } | null = null;
+  /** Alt-click strike mode: no missile choice, the sim spawns what is available. */
+  strikeMode = false;
+  /** Live hover preview for the bottom status readout. */
+  hoverUnits: { mine: number; enemy: number } = { mine: 0, enemy: 0 };
+  hoverTerrain = '';
   targetWarn: string | null = null;
   box: { x0: number; y0: number; x1: number; y1: number } | null = null;
   toasts: Toast[] = [];
@@ -464,6 +469,18 @@ export class Controller {
         this.hoverProvince = p;
         this.engine.globe.material.uniforms.hoverId.value = p + 1 || -1;
       }
+      if (this.sim && this.me) {
+        const rect = { x0: e.clientX - 90, y0: e.clientY - 90, x1: e.clientX + 90, y1: e.clientY + 90 };
+        const ids = this.units.pick(this.engine.camera, rect, window.innerWidth, window.innerHeight);
+        let mine = 0, enemy = 0;
+        for (const id of ids) {
+          const u = this.sim.unit(id);
+          if (!u) continue;
+          if (u.owner === this.me) mine++;
+          else if (this.sim.atWar(u.owner, this.me)) enemy++;
+        }
+        if (mine !== this.hoverUnits.mine || enemy !== this.hoverUnits.enemy) this.hoverUnits = { mine, enemy };
+      }
       let warn: string | null = null;
       if (this.targeting && this.sim && this.me && p >= 0) {
         const ctrl = this.sim.s.prov.ctrl[p];
@@ -480,6 +497,19 @@ export class Controller {
         return;
       }
       if (this.targeting) { this.fireAt(e.clientX, e.clientY); return; }
+      // Alt-click anywhere: immediate operational strike, no menus.
+      if (e.altKey && this.me) {
+        const at = ctl.pick(e.clientX, e.clientY);
+        const p = at ? this.world.provinceAt(at.lat, at.lon) : -1;
+        const owner = p >= 0 ? this.sim.s.prov.ctrl[p] : null;
+        if (owner && owner !== this.me && this.sim.atWar(this.me, owner)) {
+          this.dispatch({ t: 'ops', op: 'strike', target: owner });
+          this.fx.capturePulse(at!.lat, at!.lon, new THREE.Color(0xff4030));
+          this.bump();
+          return;
+        }
+        if (owner && owner !== this.me) { this.toast('Удар возможен только по противнику в войне', 'error'); return; }
+      }
       const rect = { x0: e.clientX - 14, y0: e.clientY - 10, x1: e.clientX + 14, y1: e.clientY + 10 };
       const hits = this.units.pick(this.engine.camera, rect, window.innerWidth, window.innerHeight);
       if (!e.ctrlKey && !e.metaKey) this.selectedUnits.clear();
@@ -501,6 +531,12 @@ export class Controller {
       }
       this.paletteDirty = true;
       this.bump();
+    };
+    ctl.onDoubleClick = (e) => {
+      // Double click on empty land: jump the camera there (fast map reading).
+      if (!this.sim) return;
+      const at = ctl.pick(e.clientX, e.clientY);
+      if (at) ctl.flyTo(at.lat, at.lon, Math.min(0.35, ctl.alt));
     };
     ctl.onRightClick = (e) => {
       audio.unlock();
@@ -542,6 +578,9 @@ export class Controller {
       else if (e.code === 'Escape') { this.targeting = null; this.selectedUnits.clear(); this.panel = null; this.selectedProvince = -1; this.inspectCountry = null; this.bump(); }
       else if (e.code === 'KeyH' && this.selectedUnits.size) this.dispatch({ t: 'hold', units: [...this.selectedUnits] });
       else if (e.code === 'KeyA' && e.ctrlKey) { e.preventDefault(); this.selectedUnits = new Set(this.sim.s.units.filter((u) => u.owner === this.me).map((u) => u.id)); this.bump(); }
+      else if (e.code === 'KeyO') { this.panel = this.panel === 'ops' ? null : 'ops'; this.bump(); }
+      else if (e.code === 'KeyF') { this.panel = this.panel === 'focus' ? null : 'focus'; this.bump(); }
+      else if (e.code === 'KeyR' && !e.ctrlKey) { this.panel = this.panel === 'research' ? null : 'research'; this.bump(); }
     });
     void canvas;
   }

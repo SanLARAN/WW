@@ -8,12 +8,13 @@ import { TERRAIN_INFO } from '../world/worldTypes';
 import { RESOURCE_INFO, type ResourceKey } from '../data/resources';
 import type { BuildingType } from '../game/types';
 import { money, num, people, fmtDate, fmtTime, useCtl, click } from './util';
+import { cues, opsPoints, OPS_CAP } from '../game/strategy';
 import { PanelHost } from './panels';
 import { UNIT_TYPES } from '../render/units';
 
 const NAV: [Exclude<Panel, null>, string, string][] = [
   ['overview', '🏛', 'Обзор страны'], ['economy', '💹', 'Экономика'], ['production', '🏭', 'Производство'], ['research', '🔬', 'Технологии'],
-  ['focus', '🎯', 'Национальные фокусы'], ['diplomacy', '🤝', 'Дипломатия'], ['army', '🪖', 'Вооружённые силы'], ['missiles', '🚀', 'Ракетные войска'],
+  ['focus', '🎯', 'Национальные фокусы'], ['diplomacy', '🤝', 'Дипломатия'], ['ops', '⚡', 'Командование'], ['army', '🪖', 'Вооружённые силы'], ['missiles', '🚀', 'Ракетные войска'],
   ['politics', '⚖', 'Внутренняя политика'], ['log', '📰', 'Журнал событий'], ['settings', '⚙', 'Настройки'],
 ];
 
@@ -61,6 +62,7 @@ export function Hud() {
         </div>
       )}
       <HoverTip />
+      <StatusBar />
       <HintBar />
       <EventModal />
       {c.session && c.session.role !== 'solo' && <Chat />}
@@ -97,6 +99,7 @@ function TopBar() {
           ))}
         </div>
       )}
+      {me && <WarStrip />}
       <div class="defcon" title={`Мировая напряжённость ${s.tension.toFixed(0)}`}>
         <span class="caps">DEFCON</span><b style={{ color: defcon <= 2 ? 'var(--danger)' : defcon === 3 ? 'var(--accent)' : 'var(--ok)' }}>{defcon}</b>
       </div>
@@ -108,6 +111,37 @@ function TopBar() {
         </div>
       </div>
     </header>
+  );
+}
+
+/** Live war status: who is winning, by how much, and where the front is. */
+function WarStrip() {
+  const c = ctl;
+  const sim = c.sim!, me = c.country!;
+  const wars = sim.s.wars.filter((w) => sim.sideOf(w, me.id));
+  if (!wars.length) {
+    return (
+      <div class="warstrip peace" title="Войн нет">
+        <span class="ws-ico">🕊</span><span class="ws-name">Мир</span>
+        <span class="tiny muted">операций: {opsPoints(sim, me)}/{OPS_CAP}</span>
+      </div>
+    );
+  }
+  const foes = [...new Set(wars.flatMap((w) => (w.attackers.includes(me.id) ? w.defenders : w.attackers)))].map((id) => sim.c(id)).filter(Boolean);
+  const theirLoss = foes.reduce((a, f) => a + sim.occupationShare(f!.id, me.id), 0) / Math.max(1, foes.length);
+  const myLoss = foes.reduce((a, f) => a + sim.occupationShare(me.id, f!.id), 0) / Math.max(1, foes.length);
+  const balance = theirLoss - myLoss;
+  const verdict = balance > 0.15 ? 'мы наступаем' : balance < -0.15 ? 'нас теснят' : 'фронт стоит';
+  return (
+    <div class={`warstrip ${balance > 0.15 ? 'win' : balance < -0.15 ? 'lose' : 'stale'}`} title={`Захвачено нами ${(theirLoss * 100).toFixed(0)}% · нами потеряно ${(myLoss * 100).toFixed(0)}%`}>
+      <span class="ws-ico">⚔</span>
+      <span class="ws-name">{foes.map((f) => f!.name).join(', ')}</span>
+      <span class="ws-balance">
+        <i style={{ width: `${Math.min(100, 50 + balance * 120)}%` }} />
+      </span>
+      <span class="tiny">{verdict}</span>
+      <span class="tiny muted">⚡{opsPoints(sim, me)}</span>
+    </div>
   );
 }
 
@@ -144,7 +178,9 @@ function SidePanel() {
             <div class="small muted">ПКМ по карте — приказ на движение. Танки и пехота захватывают провинции врага.</div>
             <div class="row">
               <button class="btn sm grow" onClick={click(() => c.dispatch({ t: 'hold', units: mine.map((u) => u.id) }))}>🛡 Оборона (H)</button>
-              <button class="btn sm danger" onClick={click(() => { if (confirm(`Расформировать ${mine.length} ед.?`)) { c.dispatch({ t: 'disband', units: mine.map((u) => u.id) }); c.selectedUnits.clear(); } })}>Расформировать</button>
+              <button class="btn sm grow" title="Мгновенно: +20 организации, +4 численности, 1 очко операций"
+                onClick={click(() => c.dispatch({ t: 'supply', units: mine.map((u) => u.id) }))}>📦 Снабдить</button>
+              <button class="btn sm danger" onClick={click(() => { if (confirm(`Расформировать ${mine.length} ед.?`)) { c.dispatch({ t: 'disband', units: mine.map((u) => u.id) }); c.selectedUnits.clear(); } })}>✕</button>
             </div>
           </div>
         )}
@@ -197,6 +233,52 @@ function SidePanel() {
   );
 }
 
+/**
+ * Bottom-left readout: what is under the cursor and what is selected.
+ * Replaces squinting at the map — every number that matters is one glance away.
+ */
+function StatusBar() {
+  const c = ctl;
+  if (!c.sim || !c.me) return null;
+  const s = c.state!;
+  const sel = c.selectedUnitList();
+  const p = c.hoverProvince >= 0 ? c.hoverProvince : c.selectedProvince;
+  const pr = p >= 0 ? c.world.provinces[p] : null;
+  const ctrl = pr ? s.countries[s.prov.ctrl[pr.id]] : null;
+  const own = sel.filter((u) => u.owner === c.me);
+  const str = own.length ? own.reduce((a, u) => a + u.str, 0) / own.length : 0;
+  const org = own.length ? own.reduce((a, u) => a + u.org, 0) / own.length : 0;
+  const cap = sel.length ? sel.reduce((a, u) => a + u.str * UNIT[u.type].atk * 0.01, 0) : 0;
+  return (
+    <div class="statusbar">
+      {pr && (
+        <span class="sb-cell">
+          <span class="swatch" style={{ background: ctrl?.color ?? '#666' }} />
+          <b>{pr.name}</b>
+          <span class="muted tiny">{TERRAIN_INFO[pr.terrain].icon} {TERRAIN_INFO[pr.terrain].name}</span>
+        </span>
+      )}
+      {pr && s.prov.capture[pr.id] > 0.02 && (
+        <span class="sb-cell danger tiny">захват {(s.prov.capture[pr.id] * 100).toFixed(0)}%</span>
+      )}
+      {(c.hoverUnits.mine > 0 || c.hoverUnits.enemy > 0) && (
+        <span class="sb-cell tiny">
+          <span class="ok">{c.hoverUnits.mine} своих</span> · <span class="danger">{c.hoverUnits.enemy} врагов</span>
+        </span>
+      )}
+      {sel.length > 0 && (
+        <span class="sb-cell">
+          <b>{sel.length} соед.</b>
+          <span class="bar ok" style={{ width: 60 }}><i style={{ width: `${str}%` }} /></span>
+          <span class="bar info" style={{ width: 60 }}><i style={{ width: `${org}%` }} /></span>
+          <span class="tiny muted">сила {cap.toFixed(1)}</span>
+        </span>
+      )}
+      {!pr && !sel.length && <span class="sb-cell tiny muted">Клик — провинция · Alt+клик — удар · двойной клик — приблизить</span>}
+    </div>
+  );
+}
+
 function HoverTip() {
   const c = ctl;
   if (!c.hoverPos || c.hoverProvince < 0 || c.box) return null;
@@ -213,32 +295,46 @@ function HoverTip() {
 
 const HINTS = [
   'Клик по провинции — здания, ресурсы и дипломатия с её владельцем',
-  'Режимы карты сверху: рельеф, экономика, ресурсы и карта угроз',
-  '📰 Журнал событий — вся история решений и войн',
-  '🤝 Дипломатия: улучшайте отношения, ищите союзников до войны',
-  'Shift + перетаскивание — выделить армию рамкой',
+  'Режимы карты снизу: рельеф, экономика, ресурсы и карта угроз',
+  '⚡ Командование — удары, давление и доктрина в один клик',
+  '🛡 «Оборона» даёт войскам окопаться: регенерация и штраф атакующему',
+  'Shift + перетаскивание — выделить армию рамкой, ПКМ — приказ',
 ];
 
-/** Situation-aware tip bar: teaches the loop without a tutorial wall. */
+/**
+ * Action bar: instead of a passive hint it is a queue of one-click decisions.
+ * The player never has to guess what the game is waiting for.
+ */
 function HintBar() {
   const c = ctl;
   const s = c.state!;
   const me = c.country;
   const [hide, setHide] = useState(false);
   if (!me || hide || c.targeting || c.box) return null;
-  const enemies = c.sim!.enemiesOf(me.id);
-  let hint: string;
-  if (!s.units.some((u) => u.owner === me.id)) hint = 'У вас нет армии — закажите войска в 🏭 «Производство».';
-  else if (me.budget < 0) hint = 'Казна в минусе — поднимите налог или включите печатание денег в 💹 «Экономика».';
-  else if (enemies.length && !c.selectedUnits.size) hint = `Идёт война (${enemies.map((e) => c.sim!.c(e)?.name ?? e).join(', ')}) — выделите войска и прикажите движение ПКМ.`;
-  else if (me.stability < 30) hint = 'Стабильность критична — проверьте ⚖ «Политика»: фракции, мобилизация, режим.';
-  else if (!me.research) hint = 'Выберите технологию для исследования в 🔬 «Технологии».';
-  else if (Object.values(me.missiles).some((n) => n > 0) && !enemies.length) hint = 'Есть ракеты — 🚀 «Ракетные войска» → «Навести», или приберегите для войны.';
-  else hint = HINTS[Math.floor(s.tick / 24 / 3) % HINTS.length];
+  const sim = c.sim!;
+  const list = cues(sim, me).filter((q) => q.panel !== 'ops' || true);
+  if (!list.length) {
+    const hint = HINTS[Math.floor(s.tick / 24 / 3) % HINTS.length];
+    return (
+      <div class="hintbar">
+        <span>💡 {hint}</span>
+        <button class="btn sm ghost" aria-label="Скрыть подсказки" onClick={() => setHide(true)}>✕</button>
+      </div>
+    );
+  }
+  const q = list[0];
   return (
-    <div class="hintbar">
-      <span>💡 {hint}</span>
-      <button class="btn sm ghost" aria-label="Скрыть подсказки" onClick={() => setHide(true)}>✕</button>
+    <div class="hintbar cues">
+      <span class="cue-led" />
+      <b class="cue-label">{q.label}</b>
+      <span class="cue-hint">{q.hint}</span>
+      {q.act
+        ? <button class="btn sm primary" onClick={click(() => c.dispatch(q.act!.cmd()))}>{q.act.label}</button>
+        : <button class="btn sm" onClick={click(() => { c.panel = q.panel as Panel; c.bump(); })}>Открыть</button>}
+      {list.length > 1 && (
+        <button class="btn sm ghost" title={list.slice(1).map((x) => x.label).join(' · ')} onClick={click(() => { c.panel = list[1].panel as Panel; c.bump(); })}>+{list.length - 1}</button>
+      )}
+      <button class="btn sm ghost" aria-label="Скрыть" onClick={() => setHide(true)}>✕</button>
     </div>
   );
 }

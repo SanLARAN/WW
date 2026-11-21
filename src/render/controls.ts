@@ -21,6 +21,8 @@ export class GlobeControls {
   enabled = true;
   onClick?: (e: PointerEvent) => void;
   onRightClick?: (e: PointerEvent) => void;
+  onDoubleClick?: (e: PointerEvent) => void;
+  private lastClick = { t: 0, x: 0, y: 0 };
   onHover?: (e: PointerEvent) => void;
   /** Called on drag start with shift held — box selection. Return true to consume. */
   onBoxStart?: (e: PointerEvent) => boolean;
@@ -48,6 +50,10 @@ export class GlobeControls {
     this.dom.setPointerCapture?.(e.pointerId);
     if (e.button === 2) { this.onRightClick?.(e); return; }
     if (e.button !== 0) return;
+    const now = performance.now();
+    const dbl = now - this.lastClick.t < 320 && Math.hypot(e.clientX - this.lastClick.x, e.clientY - this.lastClick.y) < 6;
+    this.lastClick = { t: now, x: e.clientX, y: e.clientY };
+    if (dbl && this.onDoubleClick) { this.onDoubleClick(e); return; }
     if (e.shiftKey && this.onBoxStart?.(e)) return;
     this.dragging = true; this.moved = 0; this.fly = null;
     this.last = { x: e.clientX, y: e.clientY };

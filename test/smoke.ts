@@ -4,6 +4,7 @@ import { World } from '../src/world/world';
 import { createSim, dispatch } from '../src/game/game';
 import { createGame } from '../src/game/setup';
 import { Sim } from '../src/game/sim';
+import { cues, opsPoints } from '../src/game/strategy';
 
 const tags = ['643', '804', '156', '840']; // RU, UA, CN, US
 const prov = new Uint16Array(W * H); // value = province index + 1
@@ -158,6 +159,38 @@ if (capPend) {
   if (capPend2) dispatch(sim, '804', { t: 'event', key: capPend2.key, option: 0 });
   T('accept capitulation resolves', s.log.some((l) => l.text.includes('капитулирует')) && !s.pending.some((p) => p.event === 'capitulation' && p.country === '804'));
 }
+
+// 9. Strategic layer: doctrine, upgrades, ops points and instant operations.
+const ru2 = s.countries['643'];
+ru2.doctrine = ''; ru2.doctrinePaid = 0; ru2.unlocks = []; ru2.unlockPoints = 3;
+T('doctrine accepted', dispatch(sim, '643', { t: 'doctrine', id: 'blitz' }) === null && ru2.doctrine === 'blitz');
+const atkBase = sim.mod(ru2, 'atk_land');
+T('doctrine mods applied', Math.abs(atkBase - 0.22) < 0.2 && atkBase > 0.1, `atk=${atkBase}`);
+T('doctrine lockout', typeof dispatch(sim, '643', { t: 'doctrine', id: 'fortress' }) === 'string');
+ru2.researched.push('mis_ballistic');
+T('unlock bought', dispatch(sim, '643', { t: 'unlock', id: 'u_missile' }) === null && ru2.unlocks.includes('u_missile') && ru2.unlockPoints === 1);
+T('unlock without tech blocked', typeof dispatch(sim, '643', { t: 'unlock', id: 'u_nuke' }) === 'string');
+
+// Ops pool: regenerates with sim time, blocks when spent, cools down.
+ru2.modifiers.ops_spent = 0;
+const tick0 = s.tick;
+s.tick = tick0 + 24 * 30;
+T('ops regenerate', opsPoints(sim, ru2) > 0, `ops=${opsPoints(sim, ru2)}`);
+s.countries['804'].alive = true;
+sim.declareWar('643', '804', 'claims');
+const opErr = dispatch(sim, '643', { t: 'ops', op: 'pressure', target: '804' });
+const stabAfter = s.countries['804'].stability;
+T('pressure applies', opErr === null && stabAfter < 100);
+T('ops cooldown enforced', typeof dispatch(sim, '643', { t: 'ops', op: 'pressure', target: '804' }) === 'string');
+const strikeErr = dispatch(sim, '643', { t: 'ops', op: 'strike', target: '804' });
+T('strike reachable or explained', strikeErr === null || /радиус|позиц/i.test(strikeErr), `e=${strikeErr}`);
+T('supply heals own units', (() => {
+  const u = s.units.find((x) => x.owner === '643' && x.type !== 'navy');
+  if (!u) return false;
+  u.org = 10; const err = dispatch(sim, '643', { t: 'supply', units: [u.id] });
+  return err === null && u.org > 25;
+})());
+T('cues suggest something', cues(sim, s.countries['643']).length > 0);
 
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);

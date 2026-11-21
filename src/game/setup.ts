@@ -1,5 +1,5 @@
 import type { World } from '../world/world';
-import { countryDefs, type CountryDef } from '../data/countries';
+import { countryDefs, tierRank, type CountryDef } from '../data/countries';
 import { TECHS } from '../data/tech';
 import { distKm } from '../core/geo';
 import { mulberry32 } from '../core/rng';
@@ -113,6 +113,7 @@ function makeCountry(world: World, d: CountryDef, provs: number[]): CountryState
       icbm: nuclear ? Math.max(2, Math.min(400, Math.round(d.nukes / 18))) : 0,
     },
     nukes: d.nukes, queue: [], tech: d.tech, researched: unique, research: null, rp: 0, focusDone: [], focus: null,
+    doctrine: '', doctrinePaid: 0, unlockPoints: tierRank(d.tier) <= 2 ? 2 : 1, unlocks: [],
     stability: d.stability, approval: Math.min(85, d.stability + 5), corruption: d.corruption, nationalism: 30 + Math.max(0, d.ideology[2]) * 0.4,
     pressFreedom: 50 - d.ideology[3] * 0.45, living: Math.min(95, Math.max(10, Math.log10(((d.gdp * 1000) / Math.max(0.05, d.pop)) + 1) * 22)),
     warExhaustion: 0, ideology: [...d.ideology], factions: {}, alliances, sanctions: [], guarantees: [], opinion: 0,

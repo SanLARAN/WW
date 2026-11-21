@@ -5,6 +5,7 @@ import { TECH_BY_ID } from '../data/tech';
 import { focusAvailable, focusById } from '../data/focus';
 import { missileCostOk, unitCostOk } from './domestic';
 import { resolvePending } from './events';
+import { DOCTRINES, UNLOCKS, opsPoints, opsCooldown } from './strategy';
 
 export type Command =
   | { t: 'move'; units: number[]; to: LL; append?: boolean }
@@ -22,8 +23,24 @@ export type Command =
   | { t: 'quarantine'; value: CountryState['quarantine'] }
   | { t: 'launch'; missile: MissileType; to: LL; count: number; targetUnit?: number | null }
   | { t: 'diplo'; action: DiploAction; target: string; arg?: number | string }
+  | { t: 'ops'; op: OpAction; target: string }
+  | { t: 'doctrine'; id: string }
+  | { t: 'unlock'; id: string }
+  | { t: 'supply'; units: number[] }
   | { t: 'event'; key: number; option: number }
   | { t: 'speed'; speed: number };
+
+/** Strategic operations: one click, immediate, capped by ops points and cooldowns. */
+export type OpAction = 'strike' | 'supply' | 'pressure' | 'influence' | 'sabotage' | 'fortify';
+
+export const OPS_INFO: Record<OpAction, { name: string; icon: string; ops: number; cd: number; target: 'enemy' | 'any'; desc: string }> = {
+  strike: { name: 'Ракетный удар', icon: '🎯', ops: 2, cd: 6, target: 'enemy', desc: 'Удар по войскам у границы: урон, срыв марша, −орг. Дорого по ресурсам.' },
+  supply: { name: 'Снабжение фронта', icon: '📦', ops: 1, cd: 4, target: 'any', desc: 'Выбранным войскам +35 организации прямо сейчас.' },
+  pressure: { name: 'Давление', icon: '🧨', ops: 1, cd: 5, target: 'any', desc: '−8 стабильности, −6 одобрения. Требует ВВП и «не добрых» отношений.' },
+  influence: { name: 'Купить влияние', icon: '💸', ops: 1, cd: 8, target: 'any', desc: '+14 к отношениям сразу, стоит казны.' },
+  sabotage: { name: 'Диверсия', icon: '🕵', ops: 2, cd: 10, target: 'any', desc: '−1 военный завод и −10% ВВП цели. Провал = скандал и −12 отношений.' },
+  fortify: { name: 'Возвести укрепления', icon: '🧱', ops: 1, cd: 6, target: 'any', desc: 'Бункер в столице страны-цели (только своя страна/союзник).' },
+};
 
 export type DiploAction = 'war' | 'peace' | 'peaceAnnex' | 'improve' | 'insult' | 'sanction' | 'unsanction' | 'alliance' | 'guarantee' | 'lendlease' | 'volunteers' | 'ultimatum' | 'spy' | 'propaganda' | 'proxy' | 'cyber' | 'coup' | 'callAllies' | 'callToArms' | 'acceptCall' | 'declineCall' | 'joinWar' | 'acceptPeace' | 'declinePeace' | 'acceptAlliance' | 'declineAlliance' | 'acceptUltimatum' | 'declineUltimatum';
 
@@ -156,6 +173,20 @@ export function applyCommand(sim: Sim, country: string, cmd: Command): string | 
       return n ? null : last;
     }
     case 'diplo': return diplo(sim, c, cmd.action, cmd.target, cmd.arg);
+    case 'ops': return ops(sim, c, cmd.op, cmd.target);
+    case 'doctrine': return execDoctrine(sim, c, cmd.id);
+    case 'unlock': return execUnlock(sim, c, cmd.id);
+    case 'supply': {
+      let n = 0;
+      for (const id of cmd.units) {
+        const u = sim.unit(id);
+        if (!u || u.owner !== country) continue;
+        u.org = Math.min(100, u.org + 20); u.str = Math.min(100, u.str + 4); u.ammo += 2; n++;
+      }
+      if (!n) return 'Выберите свои войска';
+      c.budget -= 0.4 * n; c.stock.oil = Math.max(0, c.stock.oil - 2 * n);
+      return null;
+    }
     case 'event': {
       const p = sim.s.pending.find((x) => x.key === cmd.key);
       if (!p || p.country !== country) return null;
@@ -451,4 +482,120 @@ function diplo(sim: Sim, c: CountryState, action: DiploAction, target: string, a
       return null;
     }
   }
+}
+
+// ================================================================================================ strategic layer
+/** Spend ops points and start the cooldown; returns an error when unaffordable. */
+function payOps(sim: Sim, c: CountryState, kind: string, cost: number, cd: number): string | null {
+  if (opsPoints(sim, c) < cost) return 'Недостаточно оперативных очков — подождите или постройте штабы';
+  const left = opsCooldown(sim, c, kind);
+  if (left > 0) return `Перезарядка: ${left} ч`;
+  c.flags = c.flags.filter((x) => !x.startsWith('opcd_' + kind + '_'));
+  c.flags.push(`opcd_${kind}_${sim.s.tick + cd}`);
+  c.modifiers.ops_spent = (c.modifiers.ops_spent ?? 0) + cost;
+  return null;
+}
+
+function ops(sim: Sim, c: CountryState, op: OpAction, target: string): string | null {
+  const info = OPS_INFO[op];
+  const T = sim.c(target);
+  if (!T || !T.alive) return 'Цель недоступна';
+  if (info.target === 'enemy' && !sim.atWar(c.id, target)) return 'Нужно быть в состоянии войны с целью';
+  const err = payOps(sim, c, op, info.ops, info.cd);
+  if (err) return err;
+  const rng = sim.rng();
+  switch (op) {
+    case 'strike': {
+      if (c.missiles.cruise <= 0 && c.missiles.ballistic <= 0) c.missiles.shahed += 6;
+      const type: MissileType = c.missiles.ballistic > 0 ? 'ballistic' : c.missiles.cruise > 0 ? 'cruise' : 'shahed';
+      c.missiles[type] = Math.max(0, c.missiles[type] - 1);
+      const site = sim.launchSite(c, { lat: sim.world.provinces[T.capital].lat, lon: sim.world.provinces[T.capital].lon }, type);
+      if (!site || site.km > site.range) { c.missiles[type]++; return 'Цель вне радиуса ракет — переведите войска ближе'; }
+      let hit = 0;
+      for (const u of sim.s.units) {
+        if (u.owner !== target) continue;
+        if (Math.abs(u.lat - site.lat) > 12) continue;
+        const d = Math.hypot(u.lat - site.lat, u.lon - site.lon);
+        if (d > 9) continue;
+        u.str -= 14 * (1 - d / 9); u.org -= 22; hit++;
+      }
+      sim.log(`🎯 ${c.name}: оперативный удар по ${T.name} — целей поражено ${hit}`, 'war', c.id);
+      if (!hit) sim.log(`🎯 ${c.name} наносит удар по ${T.name} — потерь нет, но фронт встряхнуло`, 'war', c.id);
+      return null;
+    }
+    case 'supply':
+    case 'fortify':
+      return null;
+    case 'pressure': {
+      const power = Math.min(1.5, 0.45 + Math.log10(Math.max(1, c.gdp) / Math.max(1, T.gdp)) * 0.6);
+      if (power <= 0.5) return `${T.name} слишком сильна — давление не сработает`;
+      T.stability = Math.max(0, T.stability - 8 * power);
+      T.approval = Math.max(0, T.approval - 6 * power);
+      sim.addRel(c.id, target, -6);
+      sim.log(`🧨 ${c.name} давит на ${T.name}: −${(8 * power).toFixed(0)} стабильности`, 'diplo', c.id);
+      return null;
+    }
+    case 'influence': {
+      const cost = Math.max(0.4, Math.min(4, T.gdp * 0.004));
+      if (c.budget < cost) { c.modifiers.ops_spent = Math.max(0, (c.modifiers.ops_spent ?? 0) - info.ops); return `Нужно ${cost.toFixed(1)} млрд`; }
+      c.budget -= cost;
+      sim.addRel(c.id, target, 14);
+      sim.log(`💸 ${c.name} покупает влияние в ${T.name} (+14 отношений)`, 'diplo', c.id);
+      return null;
+    }
+    case 'sabotage': {
+      const ok = rng < 0.55 + Math.min(0.3, c.tech / 30) - Math.min(0.25, T.tech / 40);
+      if (!ok) {
+        sim.addRel(c.id, target, -12);
+        T.stability -= 2;
+        sim.log(`🕵 Диверсия ${c.name} против ${T.name} провалилась — международный скандал`, 'diplo', c.id);
+        return null;
+      }
+      for (const p of sim.ownedProvinces(target)) if ((sim.s.prov.buildings[p].milfactory ?? 0) > 0) { sim.s.prov.buildings[p].milfactory!--; break; }
+      T.gdp *= 0.9;
+      sim.addRel(c.id, target, -4);
+      sim.log(`🕵 ${c.name}: диверсия на заводах ${T.name} удалась (−10% ВВП)`, 'diplo', c.id);
+      return null;
+    }
+  }
+}
+
+function execDoctrine(sim: Sim, c: CountryState, id: string): string | null {
+  const d = DOCTRINES.find((x) => x.id === id);
+  if (!d) return 'Неизвестная доктрина';
+  if ((c.doctrine ?? '') === id) return 'Уже выбрана';
+  if ((c.doctrinePaid ?? 0) > sim.s.tick) return 'Смена доктрины раз в 90 дней';
+  for (const [k, v] of Object.entries(d.mods)) sim.addMod(c, k, v);
+  c.doctrine = id;
+  c.doctrinePaid = sim.s.tick + 24 * 90;
+  c.mobilisation = Math.min(1, c.mobilisation + d.mobilisation);
+  c.stability = Math.min(100, c.stability + d.stability);
+  sim.log(`📜 ${c.name} принимает доктрину «${d.name}»`, 'info', c.id);
+  return null;
+}
+
+/** Auto-unlock only ever spends points you were not using — that is the point. */
+export function autoUnlock(sim: Sim): void {
+  for (const c of Object.values(sim.s.countries)) {
+    if (!c.alive || c.player) continue;
+    if (c.unlockPoints < 1) continue;
+    const avail = UNLOCKS.filter((u) => !c.unlocks.includes(u.id) && c.researched.includes(u.tech));
+    if (!avail.length) continue;
+    avail.sort((a, b) => a.cost - b.cost);
+    if (avail[0].cost <= c.unlockPoints) execUnlock(sim, c, avail[0].id);
+  }
+}
+
+function execUnlock(sim: Sim, c: CountryState, id: string): string | null {
+  const u = UNLOCKS.find((x) => x.id === id);
+  if (!u) return 'Неизвестная модификация';
+  if (c.unlocks.includes(id)) return 'Уже открыто';
+  if (!c.researched.includes(u.tech)) return `Нужна технология`;
+  if (c.unlockPoints < u.cost) return 'Не хватает очков модернизации';
+  c.unlockPoints -= u.cost;
+  c.unlocks.push(id);
+  for (const [k, v] of Object.entries(u.mods)) sim.addMod(c, k, v);
+  // Country-scoped so it never floods the global feed of other players.
+  if (c.player) sim.log(`🛠 ${c.name}: ${u.name}`, 'info', c.id);
+  return null;
 }
