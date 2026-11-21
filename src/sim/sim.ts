@@ -29,6 +29,8 @@ export class Sim {
   private dropInterval = 165;
 
   nav: NavGrid;
+  /** FPV munitions the squad still has in the bag (a supply drop tops it up) */
+  droneStock = 1;
 
   constructor(seed: number, layout: Layout) {
     this.layout = layout;
@@ -312,6 +314,7 @@ export class Sim {
     void bestT;
     if (w.id === 'drone') {
       // the drone is a single-use weapon: discard and fall back to the rifle
+      this.droneStock = Math.max(0, this.droneStock - 1);
       sol.reserve = sol.reserve.filter((r) => r !== 'drone');
       this.swapWeapon(sol, sol.weapon === 'ak' ? 'shotgun' : sol.weapon);
     }
@@ -344,6 +347,8 @@ export class Sim {
 
   swapWeapon(sol: SoldierState, id: WeaponId) {
     if (!WEAPONS[id]) return;
+    // a stockpile of one-shot drones is a shared squad resource
+    if (id === 'drone' && this.droneStock <= 0) return;
     if (sol.reserve.includes(id)) sol.reserve = sol.reserve.filter((r) => r !== id);
     sol.reserve.unshift(sol.weapon);
     sol.weapon = id;
@@ -580,6 +585,7 @@ export class Sim {
       const zone = this.layout.drops[Math.floor(this.rand() * this.layout.drops.length)];
       const roll = this.rand();
       const contents: WeaponId[] = [roll < 0.35 ? 'lmg' : roll < 0.7 ? 'sniper' : 'drone'];
+      if (contents[0] === 'drone') this.droneStock = Math.min(4, this.droneStock + 1);
       if (this.rand() < 0.35) contents.push('shotgun');
       this.s.supplies.push({ id: this.s.nextId++, x: zone.x, y: 40, z: zone.z, falling: 6, opened: false, contents });
       this.events.push({ type: 'drop', a: { x: zone.x, z: zone.z } });

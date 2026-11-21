@@ -192,6 +192,18 @@ canvas { display: block; }
 .hud-banner h2 { font-size: 15px; font-weight: 400; letter-spacing: 0.42em; color: var(--ink); }
 .hud-banner p { margin-top: 8px; font-size: 10px; letter-spacing: 0.3em; color: var(--ink-faint); }
 
+.hud-lowhp {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(120, 10, 6, 0) 42%, rgba(120, 10, 6, 0.55) 100%);
+  opacity: 0;
+  transition: opacity 180ms linear;
+  mix-blend-mode: multiply;
+}
+
+.hud-lowhp.on { opacity: 1; }
+
 .hud-compass {
   position: absolute;
   left: 50%;

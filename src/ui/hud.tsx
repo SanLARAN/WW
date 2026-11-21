@@ -49,8 +49,11 @@ export function Hud(props: {
       ? 'ТИШИНА'
       : `ДО СЛЕДУЮЩЕЙ ВОЛНЫ ${Math.max(0, Math.ceil(s.wave.timer))} С`;
 
+  const wound = me ? Math.max(0, 1 - me.hp / 45) : 0;
+
   return (
     <div class="hud" style={{ opacity: props.ads > 0.9 ? 0.45 : 1 }}>
+      <div class={`hud-lowhp${wound > 0.1 && me?.alive ? ' on' : ''}`} style={{ opacity: Math.min(1, wound) }} />
       <div class="hud-compass">{compass(me ? -me.yaw : 0)}</div>
       <div class="hud-timer">{fmtClock(s.survived)}</div>
       <div class="hud-wave">{waveText}</div>

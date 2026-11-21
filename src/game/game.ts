@@ -107,6 +107,15 @@ export class Match {
     // squad
     this.me = this.sim.addSoldier(cfg.playerName || 'Боец', false, 0, cfg.profile.xp);
     this.me.hp = this.me.maxHp = 100 + Math.round(ownedMod(cfg.profile, 'startHp'));
+    // invention: a bigger pouch means a bigger magazine, applied on top of the table
+    const magBonus = ownedMod(cfg.profile, 'magBonus');
+    if (magBonus > 0) {
+      this.me.magSize = Math.round(this.me.magSize * (1 + magBonus));
+      this.me.ammo = this.me.magSize;
+    }
+    // invention: FPV pack — one extra loitering munition, carried in the squad bag
+    const extraDrones = 1 + Math.round(ownedMod(cfg.profile, 'droneCharges'));
+    this.sim.droneStock = extraDrones;
     if (!this.cfg.net || this.cfg.host) {
       for (let i = 0; i < cfg.bots; i++) this.sim.addSoldier(`ИИ-${i + 1}`, true, i + 2, Math.round(cfg.profile.xp * 0.4));
     }
@@ -123,6 +132,7 @@ export class Match {
       if (code === 'Digit2') this.pickWeapon('shotgun');
       if (code === 'Digit3') this.pickWeapon('sniper');
       if (code === 'Digit4') this.pickWeapon('lmg');
+      if (code === 'KeyG') this.launchDrone();
       if (code === 'KeyQ') this.cycleWeapon(-1);
       if (code === 'KeyE') this.cycleWeapon(1);
     };
@@ -227,6 +237,18 @@ export class Match {
     if (!this.me.reserve.includes(id)) return;
     this.sim.swapWeapon(this.me, id);
     this.audio.ui('click');
+  }
+
+  /** FPV drone: launches from the bag if the squad has stock left. */
+  private launchDrone() {
+    if (!this.me) return;
+    if (this.sim.droneStock <= 0) {
+      this.hooks.onHint('дронов нет — ищите ящик');
+      return;
+    }
+    if (this.me.weapon === 'drone') return;
+    this.sim.swapWeapon(this.me, 'drone');
+    this.audio.ui('open');
   }
 
   private cycleWeapon(dir: number) {
@@ -367,6 +389,11 @@ export class Match {
 
     const s = this.sim.s;
     const sol = this.me!;
+    const perk = (id: string) => this.perks.some((p) => p.id === id);
+
+    // ---- perk effects that live outside the sim: stamina drain and bandage
+    if (perk('stamina')) sol.stamina = Math.min(100, sol.stamina + dt * 6);
+    if (perk('suppress')) sol.suppress = Math.max(0, sol.suppress - dt * 14);
 
     // ---- controller + camera
     const moving = Math.hypot(sol.vx, sol.vz);
@@ -388,6 +415,7 @@ export class Match {
     this.engine.focusShadows(sol.x, sol.z);
 
     // ---- weapon model & recoil
+    // the drone is a launcher, not a rifle: show the rifle while it is out
     this.view.setWeapon(sol.weapon);
     const w = WEAPONS[sol.weapon];
     const wantShot = this.input.mouse(0) && !this.paused && sol.alive;
@@ -395,7 +423,7 @@ export class Match {
     if (wantShot && this.shotCooldown <= 0 && sol.ammo > 0 && s.time >= sol.reloadingUntil) {
       this.shotCooldown = w.cadence;
       this.view.kick(this.controller.adsAmount > 0.5 ? 0.55 : 1);
-      const kick = w.recoil * 0.0042 * (1 - this.controller.adsAmount * 0.35) * (this.perks.some((p) => p.id === 'recoil') ? 0.88 : 1);
+      const kick = w.recoil * 0.0042 * (1 - this.controller.adsAmount * 0.35) * (perk('recoil') ? 0.88 : 1);
       this.controller.recoilKick(kick, (Math.random() - 0.5) * kick * 0.5, (Math.random() - 0.5) * kick * 0.8);
       this.audio.shot(w.id === 'drone' ? 'ak' : (w.id as 'ak'), 0, 0);
     }
@@ -431,7 +459,9 @@ export class Match {
 
     // ---- supply proximity hint
     const near = s.supplies.find((b) => !b.opened && b.falling <= 0 && Math.hypot(b.x - sol.x, b.z - sol.z) < 3.2);
-    this.hooks.onHint(near ? 'F — вскрыть ящик' : null);
+    if (near) this.hooks.onHint('F — вскрыть ящик');
+    else if (sol.weapon === 'drone') this.hooks.onHint('ЛКМ — запустить дрон');
+    else this.hooks.onHint(null);
 
     // ---- post params
     const post = this.engine.post();

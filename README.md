@@ -53,6 +53,7 @@
 | `R` | перезарядка |
 | `F` | вскрыть ящик снабжения |
 | `1–4`, `Q`/`E`, колесо | оружие |
+| `G` | запустить FPV-дрон (из запаса отряда) |
 | `Esc` | пауза |
 
 ## Кооп
@@ -67,7 +68,7 @@
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # headless-тесты симуляции (31 проверка)
+npm test           # headless-тесты симуляции (44 проверки)
 npm run typecheck
 npm run build      # tsc --noEmit && vite build
 ```
