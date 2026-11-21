@@ -4,7 +4,9 @@ import { UNIT } from '../data/military';
 import { tierRank } from '../data/countries';
 import { TECHS } from '../data/tech';
 import { focusAvailable, focusTree } from '../data/focus';
-import { applyCommand } from './commands';
+import { applyCommand, companyCost } from './commands';
+import { trade, routeBlocked, RES_KEYS } from './trade';
+const SECTORS_ORDER = ['energy', 'industry', 'food', 'tech'] as const;
 import { distKm } from '../core/geo';
 import { hashString } from '../core/rng';
 
@@ -25,6 +27,7 @@ export function dailyAI(sim: Sim) {
     economy(sim, c, diff);
     if (slot !== 0) continue;
     doctrine(sim, c);
+    economyDeals(sim, c);
     research(sim, c);
     focus(sim, c);
     diplomacy(sim, c, diff);
@@ -83,6 +86,31 @@ function doctrine(sim: Sim, c: CountryState) {
     : c.gdp > 800 ? 'economy'
     : 'attrition';
   applyCommand(sim, c.id, { t: 'doctrine', id: pick });
+}
+
+/**
+ * Trade and investment. AI states sign agreements with friendly neighbours and
+ * found companies when they have spare cash — this is what keeps world markets
+ * moving and prices interesting for the player.
+ */
+function economyDeals(sim: Sim, c: CountryState) {
+  const t = trade(sim);
+  const mine = t.routes.filter((r) => r.a === c.id || r.b === c.id);
+  if (mine.length < 4 && sim.rng() < 0.12) {
+    const res = RES_KEYS.filter((r) => (c.prod[r] ?? 0) > 2).sort((x, y) => (c.prod[y] - c.use[y]) - (c.prod[x] - c.use[x]))[0];
+    if (res) {
+      const partners = Object.values(sim.s.countries)
+        .filter((o) => o.alive && o.id !== c.id && sim.rel(c.id, o.id) > 10 && !routeBlocked(sim, c.id, o.id) && !t.routes.some((r) => r.a === c.id && r.b === o.id && r.res === res))
+        .sort((a, b) => sim.rel(c.id, b.id) - sim.rel(c.id, a.id)).slice(0, 3);
+      for (const p of partners) if (applyCommand(sim, c.id, { t: 'trade', partner: p.id, res }) === null) break;
+    }
+  }
+  // Companies: only when the treasury is comfortable, so war production still wins.
+  const own = t.companies.filter((x) => x.owner === c.id);
+  if (own.length < 3 && c.budget > companyCost(sim, c) * 2.5 && sim.rng() < 0.05) {
+    const pref = SECTORS_ORDER[Math.floor(sim.rng() * SECTORS_ORDER.length)];
+    applyCommand(sim, c.id, { t: 'company', sector: pref });
+  }
 }
 
 function research(sim: Sim, c: CountryState) {

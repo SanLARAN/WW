@@ -4,6 +4,7 @@ import { audio } from '../../audio/audio';
 import { ALLIANCE_INFO } from '../../data/countries';
 import { RESOURCE_INFO, type ResourceKey } from '../../data/resources';
 import { PRICE, sanctionPenalty, upkeep, dailyIncome } from '../../game/domestic';
+import { routeIncome, companyIncome, trade } from '../../game/trade';
 import { dateOf } from '../../game/types';
 import { objectiveProgress } from '../../game/campaign';
 import { money, num, people, pct, fmtDate, click } from '../util';
@@ -12,16 +13,17 @@ import { ResearchPanel, FocusPanel } from './science';
 import { DiplomacyPanel } from './diplomacy';
 import { SettingsBody } from './settings';
 import { OpsPanel } from './ops';
+import { TradePanel } from './trade';
 
 const TITLES: Record<Exclude<Panel, null>, string> = {
-  campaign: 'Кампания', overview: 'Обзор страны', economy: 'Экономика', production: 'Производство', research: 'Технологии', focus: 'Национальные фокусы',
+  campaign: 'Кампания', trade: 'Торговля и компании', overview: 'Обзор страны', economy: 'Экономика', production: 'Производство', research: 'Технологии', focus: 'Национальные фокусы',
   diplomacy: 'Дипломатия', army: 'Вооружённые силы', missiles: 'Ракетные войска', politics: 'Внутренняя политика', ops: 'Командование', log: 'Журнал событий', settings: 'Настройки',
 };
 
 export function PanelHost({ panel }: { panel: Exclude<Panel, null> }) {
   const wide = panel === 'research' || panel === 'focus';
   const body: Record<Exclude<Panel, null>, () => ComponentChildren> = {
-    campaign: () => <CampaignPanel />, overview: () => <Overview />, economy: () => <Economy />, production: () => <ProductionPanel />, research: () => <ResearchPanel />,
+    campaign: () => <CampaignPanel />, trade: () => <TradePanel />, overview: () => <Overview />, economy: () => <Economy />, production: () => <ProductionPanel />, research: () => <ResearchPanel />,
     focus: () => <FocusPanel />, diplomacy: () => <DiplomacyPanel />, army: () => <ArmyPanel />, missiles: () => <MissilesPanel />,
     politics: () => <Politics />, ops: () => <OpsPanel />, log: () => <Log />, settings: () => <SettingsBody inGame />,
   };
@@ -152,7 +154,7 @@ function Economy() {
         <div class="stat"><b>{pct(c.inflation, 1)}</b><span>Инфляция</span></div>
         <div class="stat"><b>{money(c.debt)}</b><span>Госдолг · {((c.debt / c.gdp) * 100).toFixed(0)}% ВВП</span></div>
         <div class="stat"><b class={sanc > 0.1 ? 'danger' : ''}>{(sanc * 100).toFixed(0)}%</b><span>Под санкциями (доля мира)</span></div>
-        <div class="stat"><b>${sim.s.oilPrice.toFixed(0)}</b><span>Нефть Brent</span></div>
+        <div class="stat"><b>${sim.s.oilPrice.toFixed(0)}</b><span>Нефть Brent · рынок {trade(sim).markets.oil.price.toFixed(2)}×</span></div>
       </div>
       <div class="section col">
         <h3 class="sub">Бюджет в день</h3>
@@ -160,6 +162,9 @@ function Economy() {
         <div class="kv"><span>Содержание армии</span><span class="danger">−{money(upkeep(sim, c))}</span></div>
         <div class="kv"><span>Наука</span><span class="danger">−{money((c.gdp * c.researchShare) / 365 * 0.15)}</span></div>
         <div class="kv"><span>Обслуживание долга</span><span class="danger">−{money((c.debt * 0.02) / 365)}</span></div>
+        <div class="kv"><span>Торговые соглашения</span><span class="ok">+{money(routeIncome(sim, c))}</span></div>
+        <div class="kv"><span>Дивиденды компаний</span><span class="ok">+{money(companyIncome(sim, c))}</span></div>
+        {sim.blockadeLevel(c.id) > 0 && <div class="kv"><span class="danger">⚓ Блокада побережья</span><span class="danger">−{(sim.blockadeLevel(c.id) * 55).toFixed(0)}% дохода</span></div>}
         <div class="kv"><span><b>Итого (с торговлей)</b></span><span class={c.income - c.expenses >= 0 ? 'ok' : 'danger'}>{money(c.income - c.expenses)}</span></div>
       </div>
       <div class="section col">

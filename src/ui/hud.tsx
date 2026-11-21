@@ -14,14 +14,14 @@ import { EndingScreen } from './screens';
 import { UNIT_TYPES } from '../render/units';
 
 const NAV: [Exclude<Panel, null>, string, string][] = [
-  ['overview', '🏛', 'Обзор страны'], ['campaign', '🏆', 'Кампания'], ['economy', '💹', 'Экономика'], ['production', '🏭', 'Производство'], ['research', '🔬', 'Технологии'],
+  ['overview', '🏛', 'Обзор страны'], ['campaign', '🏆', 'Кампания'], ['economy', '💹', 'Экономика'], ['trade', '📈', 'Торговля'], ['production', '🏭', 'Производство'], ['research', '🔬', 'Технологии'],
   ['focus', '🎯', 'Национальные фокусы'], ['diplomacy', '🤝', 'Дипломатия'], ['ops', '⚡', 'Командование'], ['army', '🪖', 'Вооружённые силы'], ['missiles', '🚀', 'Ракетные войска'],
   ['politics', '⚖', 'Внутренняя политика'], ['log', '📰', 'Журнал событий'], ['settings', '⚙', 'Настройки'],
 ];
 
 const MODES: [MapMode, string, string][] = [
   ['political', '🗺', 'Политическая'], ['terrain', '⛰', 'Рельеф'], ['diplomacy', '🤝', 'Дипломатия'], ['economy', '💰', 'Экономика'],
-  ['military', '⚔', 'Военная'], ['airdefense', '📡', 'ПВО'], ['resources', '🛢', 'Ресурсы'], ['threat', '⚠', 'Угрозы'],
+  ['military', '⚔', 'Военная'], ['airdefense', '📡', 'ПВО'], ['resources', '🛢', 'Ресурсы'], ['trade', '📈', 'Торговля'], ['threat', '⚠', 'Угрозы'],
 ];
 
 export function Hud() {

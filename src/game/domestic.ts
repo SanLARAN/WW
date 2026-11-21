@@ -5,6 +5,7 @@ import { TECH_BY_ID } from '../data/tech';
 import { tierRank } from '../data/countries';
 import { focusById } from '../data/focus';
 import type { ResourceKey } from '../data/resources';
+import { companyIncome, routeIncome, updateMarkets, trade as tradeState } from './trade';
 
 const RES: ResourceKey[] = ['oil', 'gas', 'uranium', 'steel', 'rare', 'food'];
 const GROWTH: Record<CountryState['econ'], number> = { market: 2.6, mixed: 2.1, planned: 1.1, war: -0.8 };
@@ -69,9 +70,12 @@ export function dailyDomestic(sim: Sim) {
     const sancBase = sanctionPenalty(sim, c);
     let sanc = sancBase;
     let trade = 0;
+    const tstate = tradeState(sim);
     for (const r of RES) {
       c.stock[r] += prod[r] - use[r];
-      const price = PRICE[r] * (r === 'oil' ? s.oilPrice / 60 : 1);
+      // World market price: base × market index for that resource.
+      const mkt = tstate.markets[r]?.price ?? 1;
+      const price = PRICE[r] * (r === 'oil' ? s.oilPrice / 60 : 1) * mkt;
       if (c.stock[r] > 300) { trade += (c.stock[r] - 300) * price * (1 - sanc * 0.8); c.stock[r] = 300; }
       if (c.stock[r] < 0) {
         const need = -c.stock[r];
@@ -95,7 +99,12 @@ export function dailyDomestic(sim: Sim) {
     c.gdpGrowth = growth;
     const occupied = provs.length ? provs.filter((i) => P.owner[i] === c.id).reduce((a, i) => a + sim.world.provinces[i].popShare, 0) : 0;
     c.gdp *= 1 + growth / 100 / 365;
-    const income = dailyIncome(sim, c) * Math.max(0.2, occupied) * (1 - blocked * 0.55) + trade + (c.printing ? c.gdp * 0.0004 : 0);
+    // Export deals are priced at our own quote: agreements pay, blockades cost.
+    // (The price itself already flows through the stockpile trade above; here we
+    // only add what a signed agreement is worth on its own.)
+    const routeBonus = routeIncome(sim, c);
+    const dividends = companyIncome(sim, c);
+    const income = dailyIncome(sim, c) * Math.max(0.2, occupied) * (1 - blocked * 0.55) + trade + routeBonus + dividends + (c.printing ? c.gdp * 0.0004 : 0);
     const research = (c.gdp * c.researchShare) / 365 * 0.15;
     const interest = (c.debt * 0.02) / 365;
     const exp = upkeep(sim, c) + research + interest;
@@ -168,8 +177,11 @@ export function dailyDomestic(sim: Sim) {
     c.factions = factions(c);
     for (const k of Object.keys(c.modifiers)) if (k.startsWith('tmp_')) { c.modifiers[k] *= 0.99; if (Math.abs(c.modifiers[k]) < 0.01) delete c.modifiers[k]; }
   }
-  // Oil price drifts to a baseline.
-  s.oilPrice += (60 - s.oilPrice) * 0.004 + (sim.rng() - 0.5) * 0.6;
+  // World markets re-price once per day from real supply and demand.
+  updateMarkets(sim);
+  // Oil price drifts to a baseline, pulled by the market index.
+  const oilIndex = tradeState(sim).markets.oil?.price ?? 1;
+  s.oilPrice = Math.max(20, Math.min(220, s.oilPrice + (60 * oilIndex - s.oilPrice) * 0.01 + (sim.rng() - 0.5) * 0.6));
 }
 
 const clamp = (v: number) => Math.max(0, Math.min(100, v));

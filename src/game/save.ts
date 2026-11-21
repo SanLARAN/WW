@@ -114,6 +114,8 @@ export function migrate(s: GameState): GameState {
     c.flags ??= [];
   }
   s.fired ??= [];
+  // Older saves predate the trade layer: rebuild markets lazily on first read.
+  if (!s.trade) delete (s as { trade?: unknown }).trade;
   s.pending ??= [];
   s.missiles ??= [];
   return s;

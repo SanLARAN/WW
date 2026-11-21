@@ -6,6 +6,7 @@ import { focusAvailable, focusById } from '../data/focus';
 import { missileCostOk, unitCostOk } from './domestic';
 import { resolvePending } from './events';
 import { DOCTRINES, UNLOCKS, opsPoints, opsCooldown } from './strategy';
+import { trade as tradeState, routeBlocked, SECTORS, type Sector } from './trade';
 
 export type Command =
   | { t: 'move'; units: number[]; to: LL; append?: boolean }
@@ -26,6 +27,10 @@ export type Command =
   | { t: 'ops'; op: OpAction; target: string }
   | { t: 'doctrine'; id: string }
   | { t: 'unlock'; id: string }
+  | { t: 'trade'; partner: string; res: string }
+  | { t: 'routeClose'; id: number }
+  | { t: 'company'; sector: string }
+  | { t: 'companyClose'; id: number }
   | { t: 'supply'; units: number[] }
   | { t: 'event'; key: number; option: number }
   | { t: 'speed'; speed: number };
@@ -176,6 +181,39 @@ export function applyCommand(sim: Sim, country: string, cmd: Command): string | 
     case 'ops': return ops(sim, c, cmd.op, cmd.target);
     case 'doctrine': return execDoctrine(sim, c, cmd.id);
     case 'unlock': return execUnlock(sim, c, cmd.id);
+    case 'trade': return openRoute(sim, c, cmd.partner, cmd.res);
+    case 'routeClose': {
+      const t = tradeState(sim);
+      const r = t.routes.find((x) => x.id === cmd.id);
+      if (!r || (r.a !== c.id && r.b !== c.id)) return 'Маршрут не найден';
+      t.routes = t.routes.filter((x) => x.id !== cmd.id);
+      const other = r.a === c.id ? r.b : r.a;
+      sim.addRel(c.id, other, -6);
+      return null;
+    }
+    case 'company': {
+      const sec = SECTORS[cmd.sector as Sector];
+      if (!sec) return 'Неизвестный сектор';
+      const cost = companyCost(sim, c);
+      if (c.budget < cost) return `Нужно $${cost.toFixed(0)} млрд`;
+      c.budget -= cost;
+      const t = tradeState(sim);
+      t.companies.push({ id: t.nextId++, owner: c.id, name: `${sec.name} ${c.name}`, sector: cmd.sector as Sector, capital: cost, founded: sim.s.tick });
+      for (const [k, v] of Object.entries(sec.mods)) sim.addMod(c, k, v);
+      sim.log(`🏢 ${c.name} основывает компанию: ${sec.name} ($${cost.toFixed(0)} млрд)`, 'econ', c.id);
+      return null;
+    }
+    case 'companyClose': {
+      const t = tradeState(sim);
+      const co = t.companies.find((x) => x.id === cmd.id && x.owner === c.id);
+      if (!co) return 'Компания не найдена';
+      // Selling out returns most of the value but drops the sector bonus.
+      c.budget += co.capital * 0.9;
+      t.companies = t.companies.filter((x) => x.id !== co.id);
+      const sec = SECTORS[co.sector];
+      if (sec) for (const [k, v] of Object.entries(sec.mods)) sim.addMod(c, k, -v);
+      return null;
+    }
     case 'supply': {
       let n = 0;
       for (const id of cmd.units) {
@@ -599,3 +637,38 @@ function execUnlock(sim: Sim, c: CountryState, id: string): string | null {
   if (c.player) sim.log(`🛠 ${c.name}: ${u.name}`, 'info', c.id);
   return null;
 }
+
+
+// ================================================================================================ trade
+export function companyCost(sim: Sim, c: CountryState): number {
+  const t = tradeState(sim);
+  const mine = t.companies.filter((x) => x.owner === c.id).length;
+  return Math.round((12 + mine * 9) * (0.5 + Math.sqrt(Math.max(1, c.gdp)) / 45));
+}
+
+/** Open a trade agreement. Cheap, instant, and it has to survive politics. */
+function openRoute(sim: Sim, c: CountryState, partner: string, res: string): string | null {
+  const B = sim.c(partner);
+  if (!B || !B.alive || B.id === c.id) return 'Недоступный партнёр';
+  if (!RES_KEYS_SET.has(res)) return 'Неизвестный ресурс';
+  const t = tradeState(sim);
+  if (t.routes.some((r) => r.res === res && ((r.a === c.id && r.b === partner) || (r.a === partner && r.b === c.id)))) return 'Такой маршрут уже есть';
+  const blocked = routeBlocked(sim, c.id, partner);
+  if (blocked) return blocked;
+  if (B.player) {
+    // Human partners get asked, AI partners decide on the spot.
+    const flag = `tradeoffer_${c.id}_${res}`;
+    if (!B.flags.includes(flag)) B.flags.push(flag);
+    sim.log(`🤝 ${c.name} предлагает вам торговое соглашение (${res}) — ответьте в «Торговле»`, 'diplo', partner);
+    return null;
+  }
+  const willingness = sim.rel(c.id, partner) > -20 || sim.militaryAllies(c.id).includes(partner) || sim.militaryAllies(partner).includes(c.id);
+  const greedy = sim.rng() < 0.35;
+  if (!willingness && !greedy) return `${B.name} отказывается: отношения слишком холодные`;
+  t.routes.push({ id: t.nextId++, a: c.id, b: partner, res: res as never, since: sim.s.tick });
+  sim.addRel(c.id, partner, 6);
+  sim.log(`🤝 ${c.name} и ${B.name}: торговое соглашение (${res})`, 'diplo', c.id);
+  return null;
+}
+
+const RES_KEYS_SET = new Set(['oil', 'gas', 'uranium', 'steel', 'rare', 'food']);

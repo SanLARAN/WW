@@ -10,7 +10,7 @@ import type { Command } from '../game/commands';
 import type { CountryState, GameState, LL, LogEntry, MissileType, Unit } from '../game/types';
 import { UNIT } from '../data/military';
 import { Terrain } from '../world/worldTypes';
-import { RESOURCE_INFO } from '../data/resources';
+import { RESOURCE_INFO, type ResourceKey } from '../data/resources';
 import { toXYZ } from '../core/geo';
 import { cities } from '../data/cities';
 import { countryDefs } from '../data/countries';
@@ -20,8 +20,8 @@ import { createSim } from '../game/game';
 import { newCampaign, tickCampaign, verdict, type CampaignState } from '../game/campaign';
 import { writeSave, readSave, latestSave, readMeta, SLOTS as SLOTS_ALL, type SaveMeta } from '../game/save';
 
-export type MapMode = 'political' | 'terrain' | 'diplomacy' | 'economy' | 'military' | 'airdefense' | 'resources' | 'threat';
-export type Panel = null | 'campaign' | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'ops' | 'log' | 'settings';
+export type MapMode = 'political' | 'terrain' | 'diplomacy' | 'economy' | 'military' | 'airdefense' | 'resources' | 'trade' | 'threat';
+export type Panel = null | 'campaign' | 'trade' | 'overview' | 'economy' | 'production' | 'research' | 'focus' | 'diplomacy' | 'army' | 'missiles' | 'politics' | 'ops' | 'log' | 'settings';
 
 export interface Toast { id: number; text: string; kind: LogEntry['kind'] | 'error' | 'ok'; t: number }
 
@@ -447,6 +447,16 @@ export class Controller {
             const col = hexToRgb(RESOURCE_INFO[best].color === '#2b2b2b' ? '#5a3a1a' : RESOURCE_INFO[best].color);
             ownerRgb = ctrlRgb = col; mix = 160 + (p.resources[best] ?? 0) * 30;
           } else { ownerRgb = ctrlRgb = [70, 70, 75]; mix = 120; }
+          break;
+        }
+        case 'trade': {
+          // Paint each province by its country's best trade position: green = exporter,
+          // red = net importer. Reads at a glance where the money flows.
+          const res = (Object.keys(RESOURCE_INFO) as ResourceKey[]).reduce((best, k) => ((oc?.prod[k] ?? 0) - (oc?.use[k] ?? 0) > ((oc?.prod[best] ?? 0) - (oc?.use[best] ?? 0)) ? k : best), 'oil' as ResourceKey);
+          const net = oc ? (oc.prod[res] ?? 0) - (oc.use[res] ?? 0) : 0;
+          const k = Math.max(-1, Math.min(1, net / 20));
+          ownerRgb = ctrlRgb = lerp3([190, 60, 50], [60, 190, 110], (k + 1) / 2);
+          mix = 220;
           break;
         }
         case 'threat': {

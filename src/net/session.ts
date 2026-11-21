@@ -336,7 +336,9 @@ export class HostSession implements Session {
       for (const id of [...sigs.keys()]) if (!seenP.has(id)) sigs.delete(id);
       // Own country state: every 5th delta (~1s) or immediately after their command.
       const includeMe = me && (this.dcount % 5 === 0 || this.meDirty.delete(pid));
-      l.send({ ...base, me: includeMe ? me : undefined, paths: mine, pend: s.pending.filter((x) => x.country === p?.country) });
+      // World markets/routes are small and shared: send them on the same slow cadence.
+      const tradeState = includeMe ? (s as { trade?: unknown }).trade : undefined;
+      l.send({ ...base, me: includeMe ? me : undefined, paths: mine, tr: tradeState, pend: s.pending.filter((x) => x.country === p?.country) });
     }
   }
 
@@ -442,6 +444,7 @@ export class ClientSession implements Session {
         s.players = msg.players as GameState['players'];
         for (const e of msg.log as LogEntry[]) if (!s.log.some((x) => x.t === e.t && x.text === e.text)) s.log.push(e);
         if (msg.me) { const me = msg.me as CountryState; s.countries[me.id] = me; }
+        if (msg.tr) (s as { trade?: unknown }).trade = msg.tr;
         s.pending = (msg.pend as GameState['pending']) ?? [];
         sim.invalidateAllies();
         break;

@@ -235,5 +235,48 @@ T('blockade detected from a fleet', (() => {
 })(), `blocked=${before2}`);
 T('peaceful countries are not blockaded', sim.blockadeLevel('156') === 0);
 
+// 12. Trade layer: markets move, agreements pay, companies yield, blockades hurt.
+import { trade, RES_KEYS, priceFor, routeIncome, companyIncome, updateMarkets } from '../src/game/trade';
+import { companyCost } from '../src/game/commands';
+
+const tstate = trade(sim);
+T('markets initialised', RES_KEYS.every((r) => typeof tstate.markets[r]?.price === 'number'));
+const p0 = tstate.markets.oil.price;
+for (let i = 0; i < 20; i++) updateMarkets(sim);
+T('prices move but stay sane', tstate.markets.oil.price !== p0 && RES_KEYS.every((r) => tstate.markets[r].price >= 0.4 && tstate.markets[r].price <= 2.2),
+  `oil=${tstate.markets.oil.price.toFixed(2)}`);
+T('price history recorded', tstate.history.oil.length > 1);
+
+const ruCash = s.countries['643'];
+ruCash.budget = 400;
+const routeErr = dispatch(sim, '643', { t: 'trade', partner: '156', res: 'oil' });
+T('trade route opens', routeErr === null && tstate.routes.some((r) => r.a === '643' && r.b === '156'), `e=${routeErr}`);
+const routePay = routeIncome(sim, ruCash);
+T('routes pay money', routePay > 0, `+${routePay.toFixed(2)}`);
+T('duplicate route rejected', typeof dispatch(sim, '643', { t: 'trade', partner: '156', res: 'oil' }) === 'string');
+const routeId = tstate.routes.find((r) => r.b === '156')!.id;
+dispatch(sim, '643', { t: 'routeClose', id: routeId });
+T('route closes', !tstate.routes.some((r) => r.id === routeId));
+
+const cost = companyCost(sim, ruCash);
+T('company affordable', ruCash.budget >= cost);
+const coErr = dispatch(sim, '643', { t: 'company', sector: 'energy' });
+T('company founded', coErr === null && tstate.companies.some((c) => c.owner === '643'), `e=${coErr} cost=${cost}`);
+T('company pays dividends', companyIncome(sim, ruCash) > 0);
+T('company bounded by sectors', typeof dispatch(sim, '643', { t: 'company', sector: 'nonsense' }) === 'string');
+
+// Trade collapses under war and sanctions.
+sim.declareWar('643', '156', 'claims');
+T('war blocks routes', routeIncome(sim, ruCash) < routePay, `now=${routeIncome(sim, ruCash).toFixed(2)}`);
+const q = priceFor(sim, ruCash, 'oil');
+T('quotes are finite', Number.isFinite(q.buy) && Number.isFinite(q.sell) && q.buy > 0 && q.sell > 0);
+
+// Trade layer survives a save round trip.
+mem.clear();
+s.campaign = camp;
+await writeSave('2', sim, '643', camp.score);
+const back = await readSave('2');
+T('trade survives save', !!back && ((back.state.trade as typeof tstate | undefined)?.routes.length ?? 0) === tstate.routes.length);
+
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);
