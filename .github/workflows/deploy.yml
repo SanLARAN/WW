@@ -1,8 +1,10 @@
 name: Deploy to GitHub Pages
 
+# GitHub Pages environment only allows the default branch to deploy, so the
+# workflow stays pinned to main. Merge the session branch to publish.
 on:
   push:
-    branches: [main, arena/70cfa90c-ww]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
