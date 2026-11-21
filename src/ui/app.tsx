@@ -80,7 +80,8 @@ export function App(): JSX.Element {
         onState: (st) => {
           if (!(opts?.host ?? true) && matchRef.current) matchRef.current.adopt(st);
           gameState.set(st);
-          if (matchRef.current) setAds(matchRef.current.controller.adsAmount);
+          const a = matchRef.current?.controller.adsAmount ?? 0;
+          setAds((prev) => (Math.abs(prev - a) > 0.12 ? a : prev));
         },
         onKill: (text) => pushFeed(text),
         onBanner: (title, sub) => {
@@ -156,8 +157,9 @@ export function App(): JSX.Element {
   const joinCode = () => { connectNet(false); };
 
   const me = useMemo(() => {
-    if (!s || !matchRef.current?.me) return null;
-    return s.soldiers.find((x) => x.id === matchRef.current?.me?.id) ?? null;
+    const match = matchRef.current;
+    if (!s || !match) return null;
+    return s.soldiers.find((x) => x.id === match.me?.id) ?? match.me ?? null;
   }, [s]);
 
   return (

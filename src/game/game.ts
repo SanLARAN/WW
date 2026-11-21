@@ -80,6 +80,7 @@ export class Match {
   private remoteIds = new Map<string, number>();
   private remoteInput = new Map<string, InputCmd>();
   private lastTracerCount = 0;
+  private lastPublish = 0;
 
   constructor(canvas: HTMLCanvasElement, cfg: MatchConfig, hooks: MatchHooks) {
     this.cfg = cfg;
@@ -195,6 +196,15 @@ export class Match {
   /** Client: take the host's world, keep our own predicted pose. */
   adopt(s: GameState) {
     if (this.cfg.host) return;
+    const myId = this.cfg.net?.myId || this.me?.id || -1;
+    // Until the host has assigned us a slot, keep our local soldier in the world
+    // so the HUD and the camera always have somebody to follow.
+    if (myId > 0 && !s.soldiers.some((x) => x.id === myId) && this.me) {
+      const me = this.me;
+      me.id = myId;
+      s.soldiers = [...s.soldiers, me];
+      this.cfg.net!.myId = myId;
+    }
     const before = this.lastTracerCount;
     this.lastTracerCount = s.tracers.length;
     if (s.tracers.length > before) {
@@ -205,9 +215,8 @@ export class Match {
       const d = Math.hypot(dx, dz);
       if (d > 3) this.audio.shot('ak', d, Math.max(-1, Math.min(1, dx / Math.max(6, d) * 0.6)));
     }
-    this.sim.adoptSnapshot(s, this.cfg.net?.myId ?? this.me?.id ?? -1);
-    const mine = this.sim.soldier(this.cfg.net?.myId ?? -1);
-    if (mine && mine.id !== this.me?.id) this.me = mine;
+    this.sim.adoptSnapshot(s, myId);
+    const mine = this.sim.soldier(myId);
     if (mine) this.me = mine;
   }
 
@@ -471,7 +480,12 @@ export class Match {
     post.uDesat.value = sol.alive ? 0 : 0.85;
     this.engine.camera.fov = this.engine.camera.fov;
 
-    this.hooks.onState(s);
+    // Preact bails out on identical references, and the sim mutates in place:
+    // publish a shallow copy, no more than 20 times a second.
+    if (now - this.lastPublish > 50) {
+      this.lastPublish = now;
+      this.hooks.onState({ ...s });
+    }
 
     // ---- network
     if (this.cfg.net && this.cfg.host) this.cfg.net.sendSnapshot(s, now);
