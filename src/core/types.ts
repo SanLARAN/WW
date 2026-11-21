@@ -17,6 +17,8 @@ export interface InputCmd {
   mz: number;
   sprint: boolean;
   crouch: boolean;
+  /** aiming down sights: tighter cone, slower walk */
+  ads: boolean;
   /** true while the trigger is held */
   fire: boolean;
   /** one-shot: reload request */
@@ -29,7 +31,7 @@ export interface InputCmd {
 }
 
 export const EMPTY_INPUT: InputCmd = {
-  seq: 0, mx: 0, mz: 0, sprint: false, crouch: false, fire: false, reload: false, use: false, yaw: 0, pitch: 0,
+  seq: 0, mx: 0, mz: 0, sprint: false, crouch: false, ads: false, fire: false, reload: false, use: false, yaw: 0, pitch: 0,
 };
 
 /** ---------- entities ---------- */
@@ -75,6 +77,7 @@ export interface SoldierState {
   stamina: number;
   crouch: boolean;
   sprint: boolean;
+  ads: boolean;
   weapon: WeaponId;
   reserve: WeaponId[];
   ammo: number;

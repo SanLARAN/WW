@@ -61,7 +61,7 @@ export class Sim {
       hp: 100 + (lvl >= 4 ? 10 : 0), maxHp: 100 + (lvl >= 4 ? 10 : 0),
       stamina: 100, crouch: false, sprint: false,
       weapon: 'ak', reserve: ['shotgun', 'sniper', 'lmg'], ammo: WEAPONS.ak.mag, magSize: WEAPONS.ak.mag,
-      reloadingUntil: 0, lastShot: -9999,
+      reloadingUntil: 0, lastShot: -9999, ads: false,
       xp, level: lvl, kills: 0, score: 0, suppress: 0, recoil: 0, lastShotPrev: -9999, lastSeq: 0,
       netX: st.x, netY: 0, netZ: st.z,
     };
@@ -115,6 +115,28 @@ export class Sim {
       this.events.push({ type: 'wave', a: { overrun: true } });
     }
     this.s.intensity = Math.max(0, this.s.intensity - TICK * 0.12);
+    this.updateRevives();
+  }
+
+  /**
+   * Revives. A downed soldier is brought back by a living squadmate who reaches
+   * him, or automatically after 20 s if the squad is still standing. Solo players
+   * get one self-aid charge per run, tracked on the soldier.
+   */
+  private updateRevives() {
+    for (const sol of this.s.soldiers) {
+      if (sol.alive) continue;
+      const downFor = (this.s.time - sol.downedAt) / 1000;
+      if (downFor < 3) continue;
+      const helpers = this.aliveSoldiers().filter((h) => h.id !== sol.id && Math.hypot(h.x - sol.x, h.z - sol.z) < 6);
+      const solo = this.aliveSoldiers().length === 0 && downFor > 20 && !sol.bot;
+      if (helpers.length || solo) {
+        sol.alive = true;
+        sol.hp = Math.max(35, sol.maxHp * 0.4);
+        sol.suppress = 0;
+        this.events.push({ type: 'wave', a: { revive: sol.id } });
+      }
+    }
   }
 
   // ------------------------------------------------------------------ player movement
@@ -123,9 +145,10 @@ export class Sim {
     sol.yaw = cmd.yaw;
     sol.pitch = Math.max(-1.45, Math.min(1.45, cmd.pitch));
     sol.crouch = cmd.crouch;
-    const wantSprint = cmd.sprint && !cmd.crouch && sol.stamina > 2 && (cmd.mx !== 0 || cmd.mz !== 0);
+    const wantSprint = cmd.sprint && !cmd.crouch && !cmd.ads && sol.stamina > 2 && (cmd.mx !== 0 || cmd.mz !== 0);
     sol.sprint = wantSprint;
-    const speed = cmd.crouch ? SPEED.crouch : wantSprint ? SPEED.sprint : SPEED.walk;
+    const speed = cmd.crouch ? SPEED.crouch : wantSprint ? SPEED.sprint : cmd.ads ? SPEED.walk * 0.62 : SPEED.walk;
+    sol.ads = cmd.ads;
     const mag = Math.hypot(cmd.mx, cmd.mz);
     const norm = mag > 1 ? 1 : mag;
     sol.vx = norm > 0 ? (cmd.mx / (mag || 1)) * speed * norm : 0;
@@ -154,7 +177,7 @@ export class Sim {
     sol.suppress = Math.max(0, sol.suppress - TICK * 22);
     // Recoil settles quickly; that slow tap-fire is the difference between a
     // marksman and a panic spray.
-    sol.recoil = Math.max(0, (sol.recoil ?? 0) - TICK * 2.1);
+    sol.recoil = Math.max(0, (sol.recoil ?? 0) - TICK * (sol.ads ? 3.4 : 2.1));
     if (sol.hp < sol.maxHp && sol.suppress < 5) sol.hp = Math.min(sol.maxHp, sol.hp + TICK * 0.7);
   }
 
@@ -224,7 +247,9 @@ export class Sim {
     sol.lastShotPrev = this.s.time;
     const spread = this.spreadOf(sol, w.spread) * (1 + (sol.recoil ?? 0) * 0.55);
     const dirs = w.pellets;
-    let hitSomething = false;
+    let anyHit = false;
+    let bestE = null as EnemyState | null;
+    let bestT = 400;
     for (let i = 0; i < dirs; i++) {
       const yaw = sol.yaw + (this.rand() - 0.5) * spread * 2;
       const pitch = sol.pitch + (this.rand() - 0.5) * spread * 2;
@@ -234,26 +259,36 @@ export class Sim {
       const eye = sol.crouch ? BODY.crouchEye : BODY.eye;
       const wall = raycastLevel(this.layout, sol.x, eye, sol.z, dx, dy, dz, 400) ?? 400;
       const enemyHit = this.raycastEnemies(sol.x, eye, sol.z, dx, dy, dz, Math.min(wall, 400));
+      let end = Math.min(wall, 400);
       if (enemyHit) {
-        hitSomething = true;
+        anyHit = true;
         const { e, t } = enemyHit;
         const dmg = w.dmg * damageFalloff(t, w.falloff);
         e.hp -= dmg;
         this.s.intensity = Math.min(1, this.s.intensity + 0.08);
         this.events.push({ type: 'hit', a: { x: sol.x + dx * t, y: eye + dy * t, z: sol.z + dz * t } });
+        end = t;
+        if (!bestE || t < bestT) { bestE = e; bestT = t; }
+        // every round that lands punches a puff of dust where it stopped
+        this.s.impacts.push({ id: this.s.nextId++, x: sol.x + dx * t, y: eye + dy * t, z: sol.z + dz * t, nx: -dx, ny: -dy, nz: -dz, t: 500, kind: 'blood' });
         if (e.hp <= 0 && e.alive) this.killEnemy(e, sol);
+      } else {
+        // wall/ground hit: dirt or sparks, and a tracer that stops there
+        if (wall < 400) {
+          this.s.impacts.push({
+            id: this.s.nextId++, x: sol.x + dx * wall, y: eye + dy * wall, z: sol.z + dz * wall,
+            nx: -dx, ny: -dy, nz: -dz, t: 700, kind: 'dirt',
+          });
+        }
       }
       this.s.tracers.push({
         id: this.s.nextId++, from: { x: sol.x, y: eye, z: sol.z },
-        to: { x: sol.x + dx * Math.min(wall, 400), y: eye + dy * Math.min(wall, 400), z: sol.z + dz * Math.min(wall, 400) },
+        to: { x: sol.x + dx * end, y: eye + dy * end, z: sol.z + dz * end },
         t: 90, enemy: false,
       });
     }
-    if (!hitSomething) {
-      const d = 90;
-      const endX = sol.x + Math.sin(sol.yaw) * d, endZ = sol.z + Math.cos(sol.yaw) * d;
-      this.s.impacts.push({ id: this.s.nextId++, x: endX, y: 0.05, z: endZ, nx: 0, ny: 1, nz: 0, t: 1200, kind: 'dirt' });
-    }
+    if (anyHit && bestE) sol.score += Math.round(w.dmg * 0.5);
+    void bestT;
     if (w.id === 'drone') {
       // the drone is a single-use weapon: discard and fall back to the rifle
       sol.reserve = sol.reserve.filter((r) => r !== 'drone');
@@ -263,7 +298,7 @@ export class Sim {
   }
 
   private spreadOf(sol: SoldierState, base: number): number {
-    let sp = base;
+    let sp = base * (sol.ads ? 0.42 : 1);
     if (sol.sprint) sp *= 2.4;
     else if (Math.abs(sol.vx) + Math.abs(sol.vz) > 0.5) sp *= 1.5;
     if (sol.crouch) sp *= 0.7;
@@ -475,6 +510,8 @@ export class Sim {
       sol.hp = 0;
       sol.downedAt = this.s.time;
       this.events.push({ type: 'kill', a: { id: sol.id, by: from?.kind ?? 'enemy' } });
+      // Downed, not out: a squadmate can still bring you back, and the squad
+      // gets one field revive every 90 s. Losing that is what ends the run.
     }
   }
 
