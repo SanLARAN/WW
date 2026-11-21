@@ -426,6 +426,7 @@ export class Match {
       const kick = w.recoil * 0.0042 * (1 - this.controller.adsAmount * 0.35) * (perk('recoil') ? 0.88 : 1);
       this.controller.recoilKick(kick, (Math.random() - 0.5) * kick * 0.5, (Math.random() - 0.5) * kick * 0.8);
       this.audio.shot(w.id === 'drone' ? 'ak' : (w.id as 'ak'), 0, 0);
+
     }
     this.view.update(dt, this.controller, now / 1000);
 
