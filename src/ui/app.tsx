@@ -35,6 +35,7 @@ export function App(): JSX.Element {
   const [peers, setPeers] = useState<string[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasKey, setCanvasKey] = useState(0);
   const matchRef = useRef<Match | null>(null);
   const netRef = useRef<Net | null>(null);
   const audioRef = useRef<AudioEngine>(new AudioEngine());
@@ -115,6 +116,7 @@ export function App(): JSX.Element {
     matchRef.current?.dispose();
     matchRef.current = null;
     gameState.set(null);
+    setCanvasKey((k) => k + 1);
   };
 
   const resume = () => {
@@ -160,7 +162,7 @@ export function App(): JSX.Element {
 
   return (
     <>
-      <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%' }} />
+      <canvas key={canvasKey} ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%' }} />
 
       {screen === 'match' && s && (
         <Hud s={s} me={me} feed={feed} banner={banner} hint={hint} hitmark={hitmark} ads={ads} />

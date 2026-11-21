@@ -62,7 +62,7 @@ export function Lobby(props: {
               style={{ width: 'auto', borderRight: 'none' }}
               onClick={() => setTab(t)}
             >
-              {t === 'brief' ? 'Задание' : t === 'squad' ? ' squad'.replace('squad', 'Отряд') : 'Полигон'}
+              {t === 'brief' ? 'Задание' : t === 'squad' ? 'Отряд' : 'Полигон'}
             </button>
           ))}
         </div>

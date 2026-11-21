@@ -75,7 +75,7 @@ export function Hud(props: {
           <div class={`hud-reload${reloading ? ' on' : ''}`}>ПЕРЕЗАРЯДКА</div>
           <div class="hud-ammo">
             <b class={me.ammo <= Math.ceil(w.mag * 0.25) ? 'low' : ''}>{me.ammo}</b>
-            <span>/ {me.reserve.length > 0 ? '—' : w.mag}</span>
+            <span>/ {me.magSize}</span>
             <em>{w.name}</em>
           </div>
         </>

@@ -142,18 +142,14 @@ export class Engine {
 
   private onResize: () => void;
 
+  /**
+   * Tear down the GPU side of one match. Materials and textures are deliberately
+   * left alone: the procedural surface set is cached and shared by the next
+   * match, so disposing it here would leave a rematch drawing blank geometry.
+   */
   dispose() {
     removeEventListener('resize', this.onResize);
     this.composer.dispose();
-    this.scene.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.geometry?.dispose?.();
-        const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-        if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-        else mat?.dispose?.();
-      }
-    });
     this.renderer.dispose();
   }
 
